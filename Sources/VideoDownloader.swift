@@ -15,7 +15,10 @@ final class VideoDownloader: ObservableObject {
             return
         }
 
-        setWorkingState()
+        DispatchQueue.main.async {
+            self.isDownloading = true
+            self.errorMessage = nil
+        }
 
         resolveRedirect(shareURL) { finalURL in
             guard let finalURL = finalURL else {
@@ -24,25 +27,27 @@ final class VideoDownloader: ObservableObject {
                 return
             }
 
-            guard let videoId = self.extractVideoId(from: finalURL.absoluteString) else {
-                self.setError("找不到视频 ID")
-                completion(nil)
-                return
-            }
-
-            self.fetchVideoDataURL(videoId: videoId) { playURL in
-                guard let playURL = playURL else {
-                    self.setError("获取视频地址失败")
+            self.resolveVideoId(from: finalURL) { videoId in
+                guard let videoId = videoId else {
+                    self.setError("找不到视频 ID")
                     completion(nil)
                     return
                 }
 
-                self.startDownload(from: playURL, completion: completion)
+                self.fetchVideoDataURL(videoId: videoId, fallbackURL: finalURL) { playURL in
+                    guard let playURL = playURL else {
+                        self.setError("获取视频地址失败")
+                        completion(nil)
+                        return
+                    }
+
+                    self.startDownload(from: playURL, completion: completion)
+                }
             }
         }
     }
 
-    // MARK: - Step 1: URL extraction & normalization
+    // MARK: - URL / ID
 
     private func extractURL(from text: String) -> URL? {
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -50,7 +55,7 @@ final class VideoDownloader: ObservableObject {
         return detector?.firstMatch(in: text, options: [], range: range)?.url
     }
 
-    // 兼容“短链 + 尾巴文本”
+    // 兼容短链后拼接尾巴文本
     private func normalizeShareURL(_ url: URL) -> URL? {
         guard let host = url.host?.lowercased() else { return url }
 
@@ -72,6 +77,22 @@ final class VideoDownloader: ObservableObject {
         URLSession.shared.dataTask(with: request) { _, response, _ in
             completion(response?.url ?? url)
         }.resume()
+    }
+
+    private func resolveVideoId(from url: URL, completion: @escaping (String?) -> Void) {
+        let text = url.absoluteString
+        if let id = extractVideoId(from: text) {
+            completion(id)
+            return
+        }
+
+        fetchHTML(from: url, referer: nil) { html in
+            guard let html = html else {
+                completion(nil)
+                return
+            }
+            completion(self.extractVideoId(from: html))
+        }
     }
 
     private func extractVideoId(from text: String) -> String? {
@@ -99,23 +120,30 @@ final class VideoDownloader: ObservableObject {
         return nil
     }
 
-    // MARK: - Step 2: Resolve playable URL
+    // MARK: - Fetch playable URL
 
-    // 顺序：旧接口 -> ies 分享页 -> douyin 视频页
-    private func fetchVideoDataURL(videoId: String, completion: @escaping (URL?) -> Void) {
+    private func fetchVideoDataURL(videoId: String, fallbackURL: URL, completion: @escaping (URL?) -> Void) {
         fetchFromLegacyAPI(videoId: videoId) { legacyURL in
             if let legacyURL = legacyURL {
                 completion(legacyURL)
                 return
             }
 
-            self.fetchFromIESSharePage(videoId: videoId) { shareURL in
-                if let shareURL = shareURL {
-                    completion(shareURL)
+            self.fetchFromIESSharePage(videoId: videoId) { iesURL in
+                if let iesURL = iesURL {
+                    completion(iesURL)
                     return
                 }
 
-                self.fetchFromVideoPage(videoId: videoId, completion: completion)
+                self.fetchFromVideoPage(videoId: videoId) { pageURL in
+                    if let pageURL = pageURL {
+                        completion(pageURL)
+                        return
+                    }
+
+                    // 最后兜底：直接解析跳转后的链接页面
+                    self.fetchFromDirectURL(fallbackURL, completion: completion)
+                }
             }
         }
     }
@@ -134,14 +162,12 @@ final class VideoDownloader: ObservableObject {
 
         URLSession.shared.dataTask(with: request) { data, _, _ in
             guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let itemList = json["item_list"] as? [[String: Any]],
-                  let item = itemList.first else {
+                  let json = try? JSONSerialization.jsonObject(with: data) else {
                 completion(nil)
                 return
             }
 
-            if let play = Self.findFirstPlayableURL(in: item) {
+            if let play = Self.findFirstPlayableURL(in: json) {
                 completion(URL(string: self.normalizePlayableURLString(play)))
                 return
             }
@@ -156,37 +182,7 @@ final class VideoDownloader: ObservableObject {
             return
         }
 
-        var request = URLRequest(url: pageURL)
-        request.httpMethod = "GET"
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://www.douyin.com/", forHTTPHeaderField: "Referer")
-        request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
-
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data = data,
-                  let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .unicode) else {
-                completion(nil)
-                return
-            }
-
-            // 1) RENDER_DATA 优先
-            if let encoded = Self.extractRenderDataJSON(html),
-               let decoded = encoded.removingPercentEncoding,
-               let jsonData = decoded.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: jsonData),
-               let play = Self.findFirstPlayableURL(in: obj) {
-                completion(URL(string: self.normalizePlayableURLString(play)))
-                return
-            }
-
-            // 2) 正则兜底
-            if let raw = Self.extractPlayableURLFromHTML(html) {
-                completion(URL(string: self.normalizePlayableURLString(raw)))
-                return
-            }
-
-            completion(nil)
-        }.resume()
+        fetchFromDirectURL(pageURL, completion: completion)
     }
 
     private func fetchFromVideoPage(videoId: String, completion: @escaping (URL?) -> Void) {
@@ -195,30 +191,67 @@ final class VideoDownloader: ObservableObject {
             return
         }
 
-        var request = URLRequest(url: pageURL)
-        request.httpMethod = "GET"
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://www.douyin.com/", forHTTPHeaderField: "Referer")
-        request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        fetchFromDirectURL(pageURL, completion: completion)
+    }
 
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data = data,
-                  let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .unicode) else {
+    private func fetchFromDirectURL(_ pageURL: URL, completion: @escaping (URL?) -> Void) {
+        fetchHTML(from: pageURL, referer: "https://www.douyin.com/") { html in
+            guard let html = html else {
                 completion(nil)
                 return
             }
 
-            if let encoded = Self.extractRenderDataJSON(html),
+            // 1) RENDER_DATA
+            if let encoded = Self.extractScriptContent(html: html, scriptId: "RENDER_DATA"),
                let decoded = encoded.removingPercentEncoding,
-               let jsonData = decoded.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: jsonData),
+               let data = decoded.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data),
                let play = Self.findFirstPlayableURL(in: obj) {
                 completion(URL(string: self.normalizePlayableURLString(play)))
                 return
             }
 
+            // 2) SIGI_STATE
+            if let sigi = Self.extractScriptContent(html: html, scriptId: "SIGI_STATE"),
+               let data = sigi.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data),
+               let play = Self.findFirstPlayableURL(in: obj) {
+                completion(URL(string: self.normalizePlayableURLString(play)))
+                return
+            }
+
+            // 3) 正则兜底
             if let raw = Self.extractPlayableURLFromHTML(html) {
                 completion(URL(string: self.normalizePlayableURLString(raw)))
+                return
+            }
+
+            completion(nil)
+        }
+    }
+
+    private func fetchHTML(from url: URL, referer: String?, completion: @escaping (String?) -> Void) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        if let referer = referer {
+            request.setValue(referer, forHTTPHeaderField: "Referer")
+        }
+
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data = data else {
+                completion(nil)
+                return
+            }
+
+            if let utf8 = String(data: data, encoding: .utf8) {
+                completion(utf8)
+                return
+            }
+
+            if let unicode = String(data: data, encoding: .unicode) {
+                completion(unicode)
                 return
             }
 
@@ -226,10 +259,16 @@ final class VideoDownloader: ObservableObject {
         }.resume()
     }
 
-    private static func extractRenderDataJSON(_ html: String) -> String? {
-        guard let start = html.range(of: "<script id=\"RENDER_DATA\" type=\"application/json\">") else { return nil }
-        guard let end = html.range(of: "</script>", range: start.upperBound..<html.endIndex) else { return nil }
-        return String(html[start.upperBound..<end.lowerBound])
+    // MARK: - Parsing helpers
+
+    private static func extractScriptContent(html: String, scriptId: String) -> String? {
+        let pattern = #"<script[^>]*id=\""# + scriptId + #"\"[^>]*>([\s\S]*?)</script>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: html, range: NSRange(location: 0, length: html.utf16.count)),
+              let range = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+        return String(html[range])
     }
 
     private static func findFirstPlayableURL(in object: Any) -> String? {
@@ -242,6 +281,10 @@ final class VideoDownloader: ObservableObject {
             if let list = dict["urlList"] as? [String], let first = list.first,
                first.contains("play") || first.contains("video") {
                 return first
+            }
+
+            if let playAddr = dict["playAddr"] as? String, playAddr.contains("play") {
+                return playAddr
             }
 
             for value in dict.values {
@@ -277,14 +320,15 @@ final class VideoDownloader: ObservableObject {
 
         for text in candidates {
             for pattern in patterns {
-                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
-                let nsRange = NSRange(location: 0, length: text.utf16.count)
-                if let match = regex.firstMatch(in: text, range: nsRange) {
-                    let captureRange = match.numberOfRanges > 1 ? match.range(at: 1) : match.range(at: 0)
-                    if let range = Range(captureRange, in: text) {
-                        let value = String(text[range])
-                        return decodeEscapedURL(value)
-                    }
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                      let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: text.utf16.count)) else {
+                    continue
+                }
+
+                let captureRange = match.numberOfRanges > 1 ? match.range(at: 1) : match.range(at: 0)
+                if let range = Range(captureRange, in: text) {
+                    let value = String(text[range])
+                    return decodeEscapedURL(value)
                 }
             }
         }
@@ -322,7 +366,7 @@ final class VideoDownloader: ObservableObject {
         return s
     }
 
-    // MARK: - Step 3: Download
+    // MARK: - Download
 
     private func startDownload(from url: URL, completion: @escaping (URL?) -> Void) {
         var request = URLRequest(url: url)
@@ -354,14 +398,7 @@ final class VideoDownloader: ObservableObject {
         }.resume()
     }
 
-    // MARK: - UI helpers
-
-    private func setWorkingState() {
-        DispatchQueue.main.async {
-            self.isDownloading = true
-            self.errorMessage = nil
-        }
-    }
+    // MARK: - UI state
 
     private func setError(_ message: String) {
         DispatchQueue.main.async {
