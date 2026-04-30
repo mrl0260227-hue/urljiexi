@@ -7,8 +7,9 @@ struct ContentView: View {
 
     @State private var inputURL: String = ""
     @State private var downloadedVideos: [VideoItem] = []
-    @State private var selectedVideo: VideoItem?
     @State private var showingTextResult = false
+    @State private var showingPlayer = false
+    @State private var playingVideoURL: URL?
 
     var body: some View {
         NavigationView {
@@ -61,13 +62,6 @@ struct ContentView: View {
                         .font(.caption)
                 }
 
-                if let processingError = processor.errorMessage {
-                    Text(processingError)
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                        .padding(.horizontal)
-                }
-
                 List {
                     Section(header: Text("已下载视频")) {
                         if downloadedVideos.isEmpty {
@@ -75,9 +69,11 @@ struct ContentView: View {
                                 .foregroundColor(.gray)
                         } else {
                             ForEach(downloadedVideos) { item in
-                                VideoRow(item: item) {
-                                    processVideo(item)
-                                }
+                                VideoRow(
+                                    item: item,
+                                    onPlay: { playVideo(item) },
+                                    onProcess: { processVideo(item) }
+                                )
                             }
                             .onDelete(perform: deleteVideo)
                         }
@@ -89,8 +85,13 @@ struct ContentView: View {
                 TextResultView(
                     text: processor.processedText,
                     isProcessing: processor.isProcessing,
-                    error: processor.errorMessage
+                    errorMessage: processor.errorMessage
                 )
+            }
+            .sheet(isPresented: $showingPlayer) {
+                if let videoURL = playingVideoURL {
+                    VideoPlayerSheet(videoURL: videoURL)
+                }
             }
             .onAppear(perform: loadSavedVideos)
         }
@@ -109,15 +110,15 @@ struct ContentView: View {
         }
     }
 
-    private func processVideo(_ item: VideoItem) {
-        selectedVideo = item
-        showingTextResult = true
+    private func playVideo(_ item: VideoItem) {
+        guard FileManager.default.fileExists(atPath: item.localURL.path) else { return }
+        playingVideoURL = item.localURL
+        showingPlayer = true
+    }
 
-        processor.extractTextFromVideo(videoURL: item.localURL) { extracted in
-            guard let index = downloadedVideos.firstIndex(where: { $0.id == item.id }) else { return }
-            downloadedVideos[index].extractedText = extracted
-            saveVideos()
-        }
+    private func processVideo(_ item: VideoItem) {
+        showingTextResult = true
+        processor.extractSubtitleText(videoURL: item.localURL)
     }
 
     private func deleteVideo(at offsets: IndexSet) {
@@ -145,36 +146,38 @@ struct ContentView: View {
 
 struct VideoRow: View {
     let item: VideoItem
+    let onPlay: () -> Void
     let onProcess: () -> Void
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading) {
                 Text(item.fileName)
                     .font(.subheadline)
                     .lineLimit(1)
-
                 Text(item.downloadDate, style: .date)
                     .font(.caption2)
                     .foregroundColor(.gray)
-
-                if let extracted = item.extractedText, !extracted.isEmpty {
-                    Text("已提取：\(extracted.prefix(28))...")
-                        .font(.caption2)
-                        .foregroundColor(.green)
-                        .lineLimit(1)
-                }
             }
 
             Spacer()
 
-            Button(action: onProcess) {
-                Label("提取字母", systemImage: "text.viewfinder")
+            Button(action: onPlay) {
+                Label("播放", systemImage: "play.circle")
                     .font(.caption)
             }
             .buttonStyle(BorderlessButtonStyle())
             .padding(8)
-            .background(Color.green.opacity(0.12))
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(8)
+
+            Button(action: onProcess) {
+                Label("提取字幕", systemImage: "doc.text.magnifyingglass")
+                    .font(.caption)
+            }
+            .buttonStyle(BorderlessButtonStyle())
+            .padding(8)
+            .background(Color.green.opacity(0.1))
             .cornerRadius(8)
         }
         .padding(.vertical, 4)
@@ -184,7 +187,7 @@ struct VideoRow: View {
 struct TextResultView: View {
     let text: String
     let isProcessing: Bool
-    let error: String?
+    let errorMessage: String?
     @Environment(\.presentationMode) var presentationMode
 
     var body: some View {
@@ -196,8 +199,8 @@ struct TextResultView: View {
                         Text("正在提取视频中的文字...")
                             .padding()
                     }
-                } else if let error = error, !error.isEmpty {
-                    Text(error)
+                } else if let errorMessage = errorMessage, !errorMessage.isEmpty {
+                    Text(errorMessage)
                         .foregroundColor(.red)
                         .padding()
                 } else {
@@ -212,6 +215,22 @@ struct TextResultView: View {
             .navigationBarItems(trailing: Button("关闭") {
                 presentationMode.wrappedValue.dismiss()
             })
+        }
+    }
+}
+
+struct VideoPlayerSheet: View {
+    let videoURL: URL
+    @Environment(\.presentationMode) var presentationMode
+
+    var body: some View {
+        NavigationView {
+            VideoPlayer(player: AVPlayer(url: videoURL))
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle("本地播放")
+                .navigationBarItems(trailing: Button("关闭") {
+                    presentationMode.wrappedValue.dismiss()
+                })
         }
     }
 }
