@@ -16,21 +16,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Best Xcode Version
-        run: |
-          # 尝试切换到 Xcode 16，如果不存在则回退到 15.4
-          if [ -d "/Applications/Xcode_16.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
-          elif [ -d "/Applications/Xcode_15.4.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
-          fi
-          xcodebuild -version
-
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate Project
-        run: xcodegen generate --spec project.yml
+      - name: Generate and Force Downgrade Project
+        run: |
+          xcodegen generate --spec project.yml
+          # 【核心修复】强制修改工程文件版本，解决 format (77) 报错
+          sed -i '' 's/objectVersion = 77/objectVersion = 56/g' DouyinDownloader.xcodeproj/project.pbxproj
+          echo "✅ Project generated and version forced to 56"
 
       - name: Build App
         run: |
