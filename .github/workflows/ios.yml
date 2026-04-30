@@ -20,19 +20,16 @@ jobs:
         run: |
           echo "==== 确认源码目录内容 ===="
           ls -R Sources/
-          # 确保关键代码文件存在，否则直接报错停止
           test -f "Sources/ContentView.swift" || (echo "错误：未找到 ContentView.swift" && exit 1)
 
       - name: Generate Xcode Project
         run: |
           xcodegen generate
           echo "==== 验证工程文件是否关联源码 ===="
-          # 检查 pbxproj 确保代码被收入编译列表
           grep ".swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：工程未关联源码！" && exit 1)
 
       - name: Archive App
         run: |
-          # 使用 archive 模式编译，确保生成完整的 .app 包
           xcodebuild archive -project DouyinDownloader.xcodeproj \
                              -scheme DouyinDownloader \
                              -archivePath DouyinDownloader.xcarchive \
@@ -45,33 +42,29 @@ jobs:
 
       - name: Package IPA
         run: |
-          mkdir -p Payload
+          # 1. 创建干净的打包工作目录，避免产生冗余的层级（如 UT 路径）
+          mkdir -p Package/Payload
+          
+          # 2. 定义编译产出的 .app 路径
           APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
           
-          if [ ! -d "$APP_PATH" ]; then
-            echo "错误：未找到编译生成的 .app 文件夹！"
-            exit 1
-          fi
-
-          # --- 核心修复步骤：确保 Sideloadly 识别 ---
-          
-          # 1. 强制赋予主二进制文件执行权限（针对 205K 二进制文件）
+          # 3. 强制修复权限：确保 205K 的二进制文件具有可执行权限
           chmod +x "$APP_PATH/DouyinDownloader"
-          
-          # 2. 赋予整个 App 包标准的目录权限
           chmod -R 755 "$APP_PATH"
 
-          # 3. 移除可能冲突的旧签名目录（由 Sideloadly 重新签名）
+          # 4. 清理残留签名防止 Sideloadly 冲突
           rm -rf "$APP_PATH/_CodeSignature" 2>/dev/null || true
 
-          # 4. 打印体积确认（日志中应显示 200K+）
-          SIZE=$(ls -lh "$APP_PATH/DouyinDownloader" | awk '{print $5}')
+          # 5. 将 .app 复制到 Payload 文件夹中[cite: 1]
+          cp -RP "$APP_PATH" Package/Payload/
+          
+          # 6. 核心步骤：进入 Package 目录进行压缩，确保 Payload 在 Zip 根目录[cite: 1]
+          cd Package
+          zip -r ../DouyinDownloader.ipa Payload
+          
+          # 7. 打印最终体积确认
           echo "==== 最终确认 ===="
-          echo "主程序二进制体积: $SIZE"
-
-          # 5. 按照 iOS 标准结构放入 Payload 并打包成 IPA
-          cp -RP "$APP_PATH" Payload/
-          zip -v -r DouyinDownloader.ipa Payload
+          ls -lh ../DouyinDownloader.ipa
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
