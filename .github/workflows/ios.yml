@@ -10,7 +10,8 @@ jobs:
     runs-on: macos-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -19,18 +20,19 @@ jobs:
         run: |
           echo "==== 确认源码目录内容 ===="
           ls -R Sources/
-          # 检查关键文件是否存在
+          # 确保关键代码文件存在，否则直接报错停止
           test -f "Sources/ContentView.swift" || (echo "错误：未找到 ContentView.swift" && exit 1)
 
       - name: Generate Xcode Project
         run: |
           xcodegen generate
-          echo "==== 验证工程文件是否成功关联源码 ===="
-          # 检查生成的 pbxproj 文件中是否包含 Swift 文件的引用
-          grep -q ".swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：生成的工程中没有代码引用！" && exit 1)
+          echo "==== 验证工程文件是否关联源码 ===="
+          # 检查 pbxproj 确保代码被收入编译列表
+          grep ".swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：工程未关联源码！" && exit 1)
 
       - name: Archive App
         run: |
+          # 使用 archive 模式编译，确保生成完整的 .app 包
           xcodebuild archive -project DouyinDownloader.xcodeproj \
                              -scheme DouyinDownloader \
                              -archivePath DouyinDownloader.xcarchive \
@@ -47,19 +49,29 @@ jobs:
           APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
           
           if [ ! -d "$APP_PATH" ]; then
-            echo "错误：找不到编译生成的 .app 文件夹！"
+            echo "错误：未找到编译生成的 .app 文件夹！"
             exit 1
           fi
 
-          # 赋予所有二进制文件执行权限，防止 Sideloadly 报错
-          chmod -R 755 "$APP_PATH"
+          # --- 核心修复步骤：确保 Sideloadly 识别 ---
           
-          # 打印主程序体积，正常应大于 100KB
+          # 1. 强制赋予主二进制文件执行权限（针对 205K 二进制文件）
+          chmod +x "$APP_PATH/DouyinDownloader"
+          
+          # 2. 赋予整个 App 包标准的目录权限
+          chmod -R 755 "$APP_PATH"
+
+          # 3. 移除可能冲突的旧签名目录（由 Sideloadly 重新签名）
+          rm -rf "$APP_PATH/_CodeSignature" 2>/dev/null || true
+
+          # 4. 打印体积确认（日志中应显示 200K+）
           SIZE=$(ls -lh "$APP_PATH/DouyinDownloader" | awk '{print $5}')
+          echo "==== 最终确认 ===="
           echo "主程序二进制体积: $SIZE"
 
+          # 5. 按照 iOS 标准结构放入 Payload 并打包成 IPA
           cp -RP "$APP_PATH" Payload/
-          zip -r DouyinDownloader.ipa Payload
+          zip -v -r DouyinDownloader.ipa Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
