@@ -61,7 +61,8 @@ class VideoDownloader: ObservableObject {
     
     private func resolveRedirect(_ url: URL, completion: @escaping (URL?) -> Void) {
         var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
+        request.httpMethod = "GET"
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         
         let task = URLSession.shared.dataTask(with: request) { _, response, _ in
             completion(response?.url)
@@ -70,10 +71,17 @@ class VideoDownloader: ObservableObject {
     }
     
     private func extractVideoId(from urlString: String) -> String? {
-        // 匹配 /video/(\d+)
+        // 匹配 /video/(\d+) 或 /v/(\d+)
         let pattern = "/video/(\\d+)"
+        let patternAlt = "/v/(\\d+)"
+        
         if let regex = try? NSRegularExpression(pattern: pattern),
            let match = regex.firstMatch(in: urlString, range: NSRange(location: 0, length: urlString.utf16.count)) {
+            if let range = Range(match.range(at: 1), in: urlString) {
+                return String(urlString[range])
+            }
+        } else if let regex = try? NSRegularExpression(pattern: patternAlt),
+                  let match = regex.firstMatch(in: urlString, range: NSRange(location: 0, length: urlString.utf16.count)) {
             if let range = Range(match.range(at: 1), in: urlString) {
                 return String(urlString[range])
             }
@@ -127,13 +135,22 @@ class VideoDownloader: ObservableObject {
             // 保存到文档目录
             let fileManager = FileManager.default
             let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let destinationURL = documentsURL.appendingPathComponent("\(UUID().uuidString).mp4")
+            let fileName = "\(UUID().uuidString).mp4"
+            let destinationURL = documentsURL.appendingPathComponent(fileName)
             
-            try? fileManager.moveItem(at: localURL, to: destinationURL)
-            
-            DispatchQueue.main.async {
-                self.isDownloading = false
-                completion(destinationURL)
+            do {
+                try fileManager.moveItem(at: localURL, to: destinationURL)
+                DispatchQueue.main.async {
+                    self.isDownloading = false
+                    // 返回文件名（相对路径）
+                    completion(URL(string: fileName))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = "文件保存失败"
+                    self.isDownloading = false
+                }
+                completion(nil)
             }
         }
         task.resume()
