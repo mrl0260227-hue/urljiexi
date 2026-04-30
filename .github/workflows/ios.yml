@@ -29,25 +29,31 @@ jobs:
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
+                     PROVISIONING_PROFILE_SPECIFIER="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      COMPILER_INDEX_STORE_ENABLE=NO \
                      clean build
 
       - name: Create Payload Directory
+        if: success()
         run: |
           mkdir -p Payload
-          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -type d | head -n 1)
+          # 尝试从所有可能的输出路径查找 .app
+          APP_PATH=$(find build -name "*.app" -type d | grep -v "Index" | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find build -name "*.app" -type d | head -n 1)
+            echo "Error: Could not find .app file anywhere!"
+            exit 1
           fi
           echo "Found App at: $APP_PATH"
           cp -r "$APP_PATH" Payload/
 
       - name: Package IPA
+        if: success()
         run: |
           zip -r DouyinDownloader.ipa Payload
 
       - name: Upload Artifact
+        if: always() # 即使失败也尝试上传，方便查看是否有部分产物
         uses: actions/upload-artifact@v4
         with:
           name: DouyinDownloader-IPA
