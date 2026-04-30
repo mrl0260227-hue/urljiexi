@@ -10,7 +10,7 @@ jobs:
     runs-on: macos-latest
     
     steps:
-      - uses: actions/checkout@v4  # 更新到 v4
+      - uses: actions/checkout@v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -24,21 +24,20 @@ jobs:
                      -scheme DouyinDownloader \
                      -sdk iphoneos \
                      -configuration Release \
+                     -destination 'generic/platform=iOS' \
                      -derivedDataPath build \
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     COMPILER_INDEX_STORE_ENABLE=NO \
                      clean build
 
       - name: Create Payload Directory
         run: |
           mkdir -p Payload
-          # 动态查找生成的 .app 文件
           APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "Error: Could not find .app file in build directory"
-            # 尝试更大范围查找作为备份
             APP_PATH=$(find build -name "*.app" -type d | head -n 1)
           fi
           echo "Found App at: $APP_PATH"
@@ -49,8 +48,8 @@ jobs:
           zip -r DouyinDownloader.ipa Payload
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4  # 必须更新到 v4，解决您图片中的报错
+        uses: actions/upload-artifact@v4
         with:
           name: DouyinDownloader-IPA
           path: DouyinDownloader.ipa
-          retention-days: 5  # 设置保存天数
+          retention-days: 5
