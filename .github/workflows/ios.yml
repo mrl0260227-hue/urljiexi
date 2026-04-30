@@ -19,6 +19,21 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
+      - name: Normalize project format for Xcode 15.4
+        run: |
+          set -euo pipefail
+          PBXPROJ="DouyinDownloader.xcodeproj/project.pbxproj"
+
+          # XcodeGen 2.44+ may emit Xcode16 format (objectVersion 77),
+          # which Xcode 15.4 cannot open.
+          sed -i '' 's/objectVersion = 77;/objectVersion = 60;/g' "$PBXPROJ"
+          sed -i '' 's/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60;/g' "$PBXPROJ"
+          sed -i '' '/minimizedProjectReferenceProxies = 1;/d' "$PBXPROJ"
+          sed -i '' 's/PBXFileSystemSynchronizedRootGroup/PBXGroup/g' "$PBXPROJ"
+
+          # quick check
+          grep -n "objectVersion" "$PBXPROJ" | head -n 2
+
       - name: Build unsigned app
         run: |
           set -euo pipefail
@@ -52,7 +67,7 @@ jobs:
           test -f "Payload/${APP_NAME}.app/${APP_NAME}"
           plutil -lint "Payload/${APP_NAME}.app/Info.plist"
 
-          # use ditto instead of zip -r to avoid invalid package structure issues
+          # avoid zip structure issues
           ditto -c -k --sequesterRsrc --keepParent Payload DouyinDownloader.ipa
 
       - name: Upload IPA
