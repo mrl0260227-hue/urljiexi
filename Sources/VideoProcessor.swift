@@ -63,45 +63,45 @@ class VideoProcessor: ObservableObject {
         }
     }
 
-// 修改 VideoProcessor.swift 中的 extractTextFromFrames 函数
-func extractTextFromFrames(videoURL: URL) {
-    self.isProcessing = true
-    self.processedText = "正在进行 OCR 文字识别..."
-    
-    let asset = AVAsset(url: videoURL)
-    let generator = AVAssetImageGenerator(asset: asset)
-    generator.appliesPreferredTrackTransform = true
-    
-    let times = [NSValue(time: CMTime(seconds: 1, preferredTimescale: 600)),
-                 NSValue(time: CMTime(seconds: 5, preferredTimescale: 600))]
-    
-    var recognizedTexts: [String] = []
-    let group = DispatchGroup()
-    
-    for time in times {
-        group.enter()
-        generator.generateCGImagesAsynchronously(forTimes: [time]) { _, image, _, _, _ in
-            if let image = image {
-                // 注意：这里需要再次进入 group，因为 recognizeTextInImage 内部也是异步的
-                group.enter() 
-                self.recognizeTextInImage(image: image) { text in
-                    if !text.isEmpty {
-                        recognizedTexts.append(text)
+// ... 前面代码保持不变 ...
+    func extractTextFromFrames(videoURL: URL) {
+        self.isProcessing = true
+        self.processedText = "正在进行 OCR 文字识别..."
+        
+        let asset = AVAsset(url: videoURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        
+        let times = [NSValue(time: CMTime(seconds: 1, preferredTimescale: 600)),
+                     NSValue(time: CMTime(seconds: 5, preferredTimescale: 600))]
+        
+        var recognizedTexts: [String] = []
+        let group = DispatchGroup()
+        
+        for time in times {
+            group.enter()
+            generator.generateCGImagesAsynchronously(forTimes: [time]) { _, image, _, _, _ in
+                if let image = image {
+                    group.enter() // 再次进入以等待内部识别完成
+                    self.recognizeTextInImage(image: image) { text in
+                        if !text.isEmpty {
+                            recognizedTexts.append(text)
+                        }
+                        group.leave()
+                        group.leave()
                     }
+                } else {
                     group.leave()
-                    group.leave() // 对应 generator 的 leave
                 }
-            } else {
-                group.leave()
             }
         }
+        
+        group.notify(queue: .main) {
+            self.processedText = recognizedTexts.joined(separator: "\n---\n")
+            self.isProcessing = false
+        }
     }
-    
-    group.notify(queue: .main) {
-        self.processedText = recognizedTexts.joined(separator: "\n---\n")
-        self.isProcessing = false
-    }
-}
+// ... 后面代码保持不变 ...
     
     private func recognizeTextInImage(image: CGImage, completion: @escaping (String) -> Void) {
         let request = VNRecognizeTextRequest { request, error in
