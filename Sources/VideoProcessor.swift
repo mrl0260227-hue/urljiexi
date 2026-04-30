@@ -63,7 +63,7 @@ class VideoProcessor: ObservableObject {
         }
     }
 
-// ... 前面代码保持不变 ...
+    // 视频帧文字识别 (OCR) - 示例代码，展示如何从视频中提取文字
     func extractTextFromFrames(videoURL: URL) {
         self.isProcessing = true
         self.processedText = "正在进行 OCR 文字识别..."
@@ -72,36 +72,36 @@ class VideoProcessor: ObservableObject {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         
+        // 简单起见，提取第 1 秒、第 5 秒、第 10 秒的帧进行识别
         let times = [NSValue(time: CMTime(seconds: 1, preferredTimescale: 600)),
                      NSValue(time: CMTime(seconds: 5, preferredTimescale: 600))]
         
         var recognizedTexts: [String] = []
         let group = DispatchGroup()
         
-        for time in times {
-            group.enter()
-            generator.generateCGImagesAsynchronously(forTimes: [time]) { _, image, _, _, _ in
-                if let image = image {
-                    group.enter() // 再次进入以等待内部识别完成
-                    self.recognizeTextInImage(image: image) { text in
-                        if !text.isEmpty {
-                            recognizedTexts.append(text)
-                        }
-                        group.leave()
-                        group.leave()
+    for time in times {
+        group.enter()
+        generator.generateCGImagesAsynchronously(forTimes: [time]) { _, image, _, _, _ in
+            if let image = image {
+                group.enter()
+                self.recognizeTextInImage(image: image) { text in
+                    if !text.isEmpty {
+                        recognizedTexts.append(text)
                     }
-                } else {
+                    group.leave()
                     group.leave()
                 }
+            } else {
+                group.leave()
             }
         }
+    }
         
         group.notify(queue: .main) {
             self.processedText = recognizedTexts.joined(separator: "\n---\n")
             self.isProcessing = false
         }
     }
-// ... 后面代码保持不变 ...
     
     private func recognizeTextInImage(image: CGImage, completion: @escaping (String) -> Void) {
         let request = VNRecognizeTextRequest { request, error in
