@@ -15,8 +15,20 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify Source Files
+        run: |
+          echo "==== 检查源码文件列表 ===="
+          ls -R Sources/
+          if [ ! -f "Sources/ContentView.swift" ]; then
+            echo "错误：未能在 Sources 目录下找到 ContentView.swift！请检查文件夹结构。"
+            exit 1
+          fi
+
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          echo "==== 验证工程文件是否包含源码引用 ===="
+          grep ".swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：工程文件中没有关联任何 Swift 源文件！" && exit 1)
 
       - name: Archive App
         run: |
@@ -30,19 +42,23 @@ jobs:
                              CODE_SIGN_IDENTITY="" \
                              PROVISIONING_PROFILE_SPECIFIER=""
 
-      - name: Export IPA (Pseudo-Export)
+      - name: Package IPA
         run: |
           mkdir -p Payload
-          # 归档模式下，.app 文件就在这个固定路径
           APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
           
           if [ ! -d "$APP_PATH" ]; then
-            echo "Error: App not found in archive!"
+            echo "错误：未能找到编译生成的 .app 文件！"
             exit 1
           fi
 
-          # 赋予执行权限
+          # 核心修复：为二进制文件赋予可执行权限，否则 Sideloadly 会报 Invalid file
           chmod -R +x "$APP_PATH"
+          
+          # 检查生成的二进制文件大小，确保不是 0KB
+          BINARY_SIZE=$(ls -lh "$APP_PATH/DouyinDownloader" | awk '{print $5}')
+          echo "主程序二进制文件大小为: $BINARY_SIZE"
+
           cp -RP "$APP_PATH" Payload/
           zip -r DouyinDownloader.ipa Payload
 
@@ -51,3 +67,4 @@ jobs:
         with:
           name: DouyinDownloader-IPA
           path: DouyinDownloader.ipa
+          retention-days: 5
