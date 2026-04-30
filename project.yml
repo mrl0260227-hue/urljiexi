@@ -13,4 +13,7 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: com.yourname.douyindownloader
       MARKETING_VERSION: 1.0.0
       CURRENT_PROJECT_VERSION: 1
-      CODE_SIGNING_ALLOWED: NO # 暂时不允许签名，方便在 GitHub Actions 中构建未签名的 IPA
+      CODE_SIGNING_ALLOWED: NO
+      CODE_SIGNING_REQUIRED: NO
+      CODE_SIGN_IDENTITY: ""
+      AD_HOC_CODE_SIGNING_ALLOWED: YES
