@@ -2,11 +2,16 @@ import Foundation
 
 struct VideoItem: Identifiable, Codable {
     var id = UUID()
-    let localURL: URL
+    let relativePath: String // 存储相对路径
     let downloadDate: Date
     var extractedText: String?
     
+    var localURL: URL {
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return documentsURL.appendingPathComponent(relativePath)
+    }
+    
     var fileName: String {
-        localURL.lastPathComponent
+        relativePath
     }
 }
