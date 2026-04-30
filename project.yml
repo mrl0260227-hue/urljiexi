@@ -1,21 +1,26 @@
 name: DouyinDownloader
+
 options:
   bundleIdPrefix: com.yourname
+
 targets:
   DouyinDownloader:
     type: application
     platform: iOS
     deploymentTarget: "15.0"
-    sources: 
+    sources:
       - Sources
     settings:
       INFOPLIST_FILE: Sources/Info.plist
+      PRODUCT_NAME: DouyinDownloader
       PRODUCT_BUNDLE_IDENTIFIER: com.yourname.douyindownloader
       MARKETING_VERSION: 1.0.0
       CURRENT_PROJECT_VERSION: 1
+      TARGETED_DEVICE_FAMILY: "1"
+
+      # unsigned build for Sideloadly re-sign
+      CODE_SIGN_STYLE: Manual
       CODE_SIGNING_ALLOWED: NO
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGN_IDENTITY: ""
-      CODE_SIGN_STYLE: Manual
-      AD_HOC_CODE_SIGNING_ALLOWED: YES
-      GENERATE_INFOPLIST_FILE: NO
+      DEVELOPMENT_TEAM: ""
