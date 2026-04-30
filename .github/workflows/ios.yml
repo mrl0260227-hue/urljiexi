@@ -1,66 +1,62 @@
-name: Build iOS App
+name: Build Unsigned IPA (for Sideloadly)
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     runs-on: macos-14
-    
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate and Force Downgrade Project
-        run: |
-          xcodegen generate --spec project.yml
-          # 【核心修复】强制修改工程文件版本，解决 format (77) 报错
-          sed -i '' 's/objectVersion = 77/objectVersion = 56/g' DouyinDownloader.xcodeproj/project.pbxproj
-          echo "✅ Project generated and version forced to 56"
+      - name: Generate Xcode Project
+        run: xcodegen generate
 
-      - name: Build App
+      - name: Build unsigned app
         run: |
-          xcodebuild build -project DouyinDownloader.xcodeproj \
-                           -scheme DouyinDownloader \
-                           -sdk iphoneos \
-                           -configuration Release \
-                           -derivedDataPath build_output \
-                           -quiet \
-                           CODE_SIGNING_ALLOWED=NO \
-                           CODE_SIGNING_REQUIRED=NO \
-                           CODE_SIGN_IDENTITY="" \
-                           AD_HOC_CODE_SIGNING_ALLOWED=YES
+          set -euo pipefail
+          xcodebuild \
+            -project DouyinDownloader.xcodeproj \
+            -scheme DouyinDownloader \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
 
-      - name: Package IPA
+      - name: Package IPA (Payload only)
         run: |
+          set -euo pipefail
+          rm -rf Payload DouyinDownloader.ipa
           mkdir -p Payload
-          APP_PATH=$(find build_output -name "*.app" -type d | head -n 1)
-          
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ 错误：未找到生成的 .app 文件"
+
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+          if [ -z "${APP_PATH}" ]; then
+            echo "Error: .app not found"
             exit 1
           fi
 
-          chmod +x "$APP_PATH/DouyinDownloader"
-          rm -rf "$APP_PATH/_CodeSignature"
-          
-          cp -a "$APP_PATH" Payload/
-          zip -q -r DouyinDownloader.ipa Payload
-          
-          echo "==== IPA 结构验证 ===="
-          unzip -l DouyinDownloader.ipa | head -n 15
+          cp -R "${APP_PATH}" Payload/
 
-      - name: Upload Artifact
+          APP_NAME=$(basename "${APP_PATH}" .app)
+          test -f "Payload/${APP_NAME}.app/Info.plist"
+          test -f "Payload/${APP_NAME}.app/${APP_NAME}"
+          plutil -lint "Payload/${APP_NAME}.app/Info.plist"
+
+          # use ditto instead of zip -r to avoid invalid package structure issues
+          ditto -c -k --sequesterRsrc --keepParent Payload DouyinDownloader.ipa
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: DouyinDownloader-IPA
           path: DouyinDownloader.ipa
-          retention-days: 5
