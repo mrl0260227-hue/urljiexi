@@ -24,36 +24,39 @@ jobs:
                      -scheme DouyinDownloader \
                      -sdk iphoneos \
                      -configuration Release \
-                     -destination 'generic/platform=iOS' \
                      -derivedDataPath build \
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
                      PROVISIONING_PROFILE_SPECIFIER="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     COMPILER_INDEX_STORE_ENABLE=NO \
                      clean build
 
-      - name: Create Payload Directory
-        if: success()
+      - name: Prepare IPA
         run: |
           mkdir -p Payload
-          # 尝试从所有可能的输出路径查找 .app
-          APP_PATH=$(find build -name "*.app" -type d | grep -v "Index" | head -n 1)
+          # 精确查找编译产物路径
+          APP_PATH="build/Build/Products/Release-iphoneos/DouyinDownloader.app"
+          
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Error: Standard path not found, searching..."
+            APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -type d -maxdepth 1 | head -n 1)
+          fi
+          
           if [ -z "$APP_PATH" ]; then
-            echo "Error: Could not find .app file anywhere!"
+            echo "Final Error: Could not find .app file!"
             exit 1
           fi
-          echo "Found App at: $APP_PATH"
-          cp -r "$APP_PATH" Payload/
 
-      - name: Package IPA
-        if: success()
-        run: |
+          echo "Using App at: $APP_PATH"
+          
+          # 修复权限位（解决 Windows/Sideloadly 可能的 Invalid file 报错）
+          chmod -R +x "$APP_PATH"
+          
+          cp -RP "$APP_PATH" Payload/
           zip -r DouyinDownloader.ipa Payload
 
       - name: Upload Artifact
-        if: always() # 即使失败也尝试上传，方便查看是否有部分产物
         uses: actions/upload-artifact@v4
         with:
           name: DouyinDownloader-IPA
