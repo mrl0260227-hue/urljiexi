@@ -9,17 +9,19 @@ targets:
     sources:
       - path: Sources
         excludes:
-          - "Info.plist" # 排除 Info.plist，防止被当作源码编译
+          - "Info.plist"
     settings:
       INFOPLIST_FILE: Sources/Info.plist
       PRODUCT_BUNDLE_IDENTIFIER: com.yourname.douyindownloader
       MARKETING_VERSION: 1.0.0
       CURRENT_PROJECT_VERSION: 1
-      # 深度禁用签名
+      # 强制手动签名模式
+      CODE_SIGN_STYLE: Manual
       CODE_SIGNING_ALLOWED: NO
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGN_IDENTITY: ""
-      AD_HOC_CODE_SIGNING_ALLOWED: YES
-      ENTITLEMENTS_ALLOWED: NO
       PROVISIONING_PROFILE_SPECIFIER: ""
-      DEVELOPMENT_TEAM: ""
+      # 禁用所有可能的权限检查
+      ENTITLEMENTS_ALLOWED: NO
+      AD_HOC_CODE_SIGNING_ALLOWED: YES
+      GENERATE_INFOPLIST_FILE: NO
