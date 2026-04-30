@@ -18,41 +18,31 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      - name: Build App
+      - name: Archive App
         run: |
-          xcodebuild -project DouyinDownloader.xcodeproj \
-                     -scheme DouyinDownloader \
-                     -sdk iphoneos \
-                     -configuration Release \
-                     -derivedDataPath build \
-                     CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGN_IDENTITY="" \
-                     PROVISIONING_PROFILE_SPECIFIER="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build
+          xcodebuild archive -project DouyinDownloader.xcodeproj \
+                             -scheme DouyinDownloader \
+                             -archivePath DouyinDownloader.xcarchive \
+                             -sdk iphoneos \
+                             -configuration Release \
+                             CODE_SIGNING_ALLOWED=NO \
+                             CODE_SIGNING_REQUIRED=NO \
+                             CODE_SIGN_IDENTITY="" \
+                             PROVISIONING_PROFILE_SPECIFIER=""
 
-      - name: Prepare IPA
+      - name: Export IPA (Pseudo-Export)
         run: |
           mkdir -p Payload
-          # 精确查找编译产物路径
-          APP_PATH="build/Build/Products/Release-iphoneos/DouyinDownloader.app"
+          # 归档模式下，.app 文件就在这个固定路径
+          APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
           
           if [ ! -d "$APP_PATH" ]; then
-            echo "Error: Standard path not found, searching..."
-            APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -type d -maxdepth 1 | head -n 1)
-          fi
-          
-          if [ -z "$APP_PATH" ]; then
-            echo "Final Error: Could not find .app file!"
+            echo "Error: App not found in archive!"
             exit 1
           fi
 
-          echo "Using App at: $APP_PATH"
-          
-          # 修复权限位（解决 Windows/Sideloadly 可能的 Invalid file 报错）
+          # 赋予执行权限
           chmod -R +x "$APP_PATH"
-          
           cp -RP "$APP_PATH" Payload/
           zip -r DouyinDownloader.ipa Payload
 
@@ -61,4 +51,3 @@ jobs:
         with:
           name: DouyinDownloader-IPA
           path: DouyinDownloader.ipa
-          retention-days: 5
