@@ -1,6 +1,5 @@
 import Foundation
 import AVFoundation
-import Speech
 import Vision
 
 final class VideoProcessor: ObservableObject {
@@ -8,14 +7,7 @@ final class VideoProcessor: ObservableObject {
     @Published var processedText = ""
     @Published var errorMessage: String?
 
-    private var recognitionTask: SFSpeechRecognitionTask?
-
-    deinit {
-        recognitionTask?.cancel()
-    }
-
-    // 主入口：先 OCR（视频画面文字），OCR 为空时回退语音识别
-    func extractTextFromVideo(videoURL: URL, completion: ((String) -> Void)? = nil) {
+    func extractSubtitleText(videoURL: URL) {
         DispatchQueue.main.async {
             self.isProcessing = true
             self.processedText = ""
@@ -23,31 +15,21 @@ final class VideoProcessor: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let ocrResult = self.extractTextByOCR(from: videoURL)
+            let text = self.runSubtitleOCR(videoURL: videoURL)
 
-            if !ocrResult.isEmpty {
-                self.finishSuccess(ocrResult, completion: completion)
-                return
-            }
-
-            self.extractTextBySpeech(from: videoURL) { result in
-                switch result {
-                case .success(let text):
-                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        self.finishFailure("未识别到可用文字（画面和语音都为空）")
-                    } else {
-                        self.finishSuccess(text, completion: completion)
-                    }
-                case .failure(let error):
-                    self.finishFailure(error.localizedDescription)
+            DispatchQueue.main.async {
+                if text.isEmpty {
+                    self.errorMessage = "未识别到清晰字幕，请换一个字幕更清晰的视频再试。"
+                    self.processedText = ""
+                } else {
+                    self.processedText = text
                 }
+                self.isProcessing = false
             }
         }
     }
 
-    // MARK: - OCR
-
-    private func extractTextByOCR(from videoURL: URL) -> String {
+    private func runSubtitleOCR(videoURL: URL) -> String {
         let asset = AVAsset(url: videoURL)
         let duration = CMTimeGetSeconds(asset.duration)
         guard duration.isFinite, duration > 0 else { return "" }
@@ -57,27 +39,24 @@ final class VideoProcessor: ObservableObject {
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
 
-        let sampleCount = max(4, min(14, Int(duration / 1.5)))
-        var allLines: [String] = []
-        var alphaNumericLines: [String] = []
+        let sampleCount = max(8, min(24, Int(duration / 1.2)))
+        var lines: [String] = []
 
         for i in 1...sampleCount {
-            let second = min(duration - 0.05, Double(i) * duration / Double(sampleCount + 1))
+            let second = min(duration - 0.08, Double(i) * duration / Double(sampleCount + 1))
             guard second > 0 else { continue }
 
             let time = CMTime(seconds: second, preferredTimescale: 600)
 
             do {
-                let cgImage = try generator.copyCGImage(at: time, actualTime: nil)
-                let lines = recognizeText(in: cgImage)
+                let fullImage = try generator.copyCGImage(at: time, actualTime: nil)
+                guard let subtitleArea = cropBottomArea(from: fullImage) else { continue }
 
-                for line in lines {
-                    let cleaned = normalizeLine(line)
-                    guard !cleaned.isEmpty else { continue }
-                    allLines.append(cleaned)
-
-                    if containsAlphaNumeric(cleaned) {
-                        alphaNumericLines.append(cleaned)
+                let recognized = recognizeText(in: subtitleArea)
+                for raw in recognized {
+                    let cleaned = normalizeLine(raw)
+                    if isLikelySubtitle(cleaned) {
+                        lines.append(cleaned)
                     }
                 }
             } catch {
@@ -85,188 +64,86 @@ final class VideoProcessor: ObservableObject {
             }
         }
 
-        let prioritized = uniquePreservingOrder(alphaNumericLines)
-        if !prioritized.isEmpty {
-            return prioritized.joined(separator: "\n")
-        }
+        let merged = mergeLines(lines)
+        return merged.joined(separator: "\n")
+    }
 
-        let fallback = uniquePreservingOrder(allLines)
-        return fallback.joined(separator: "\n")
+    private func cropBottomArea(from image: CGImage) -> CGImage? {
+        let width = image.width
+        let height = image.height
+
+        let cropHeight = Int(Double(height) * 0.42)
+        let cropY = 0
+        let rect = CGRect(x: 0, y: cropY, width: width, height: cropHeight)
+
+        return image.cropping(to: rect)
     }
 
     private func recognizeText(in image: CGImage) -> [String] {
-        var captured: [String] = []
+        var results: [String] = []
 
         let request = VNRecognizeTextRequest { request, _ in
             guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
-            for observation in observations {
-                if let best = observation.topCandidates(1).first?.string {
-                    captured.append(best)
+            for item in observations {
+                if let top = item.topCandidates(1).first?.string {
+                    results.append(top)
                 }
             }
         }
 
         request.recognitionLevel = .accurate
-        request.recognitionLanguages = ["en-US", "zh-Hans"]
         request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.minimumTextHeight = 0.018
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         try? handler.perform([request])
 
-        return captured
+        return results
     }
 
-    private func normalizeLine(_ line: String) -> String {
-        line.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    private func normalizeLine(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "|", with: "")
+            .replacingOccurrences(of: "_", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func containsAlphaNumeric(_ text: String) -> Bool {
-        text.range(of: "[A-Za-z0-9]", options: .regularExpression) != nil
+    private func isLikelySubtitle(_ line: String) -> Bool {
+        guard line.count >= 2 else { return false }
+
+        let hasMeaningful = line.range(of: "[\\p{Han}A-Za-z0-9]", options: .regularExpression) != nil
+        let onlySymbols = line.range(of: "^[\\p{P}\\p{S}\\s]+$", options: .regularExpression) != nil
+
+        if !hasMeaningful || onlySymbols { return false }
+
+        if line.range(of: "^[A-Z0-9\\s\\.:\\-]{10,}$", options: .regularExpression) != nil {
+            return false
+        }
+
+        return true
     }
 
-    // MARK: - Speech fallback
+    private func mergeLines(_ lines: [String]) -> [String] {
+        var merged: [String] = []
 
-    private func extractTextBySpeech(from videoURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
-        exportAudioTrack(from: videoURL) { result in
-            switch result {
-            case .failure(let error):
-                completion(.failure(error))
-            case .success(let audioURL):
-                self.requestSpeechAuthorization { authorized in
-                    guard authorized else {
-                        try? FileManager.default.removeItem(at: audioURL)
-                        completion(.failure(NSError(
-                            domain: "VideoProcessor",
-                            code: 1,
-                            userInfo: [NSLocalizedDescriptionKey: "未授予语音识别权限"]
-                        )))
-                        return
-                    }
+        for line in lines {
+            guard !line.isEmpty else { continue }
 
-                    let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
-                    guard let recognizer = recognizer, recognizer.isAvailable else {
-                        try? FileManager.default.removeItem(at: audioURL)
-                        completion(.failure(NSError(
-                            domain: "VideoProcessor",
-                            code: 2,
-                            userInfo: [NSLocalizedDescriptionKey: "语音识别当前不可用"]
-                        )))
-                        return
-                    }
-
-                    let request = SFSpeechURLRecognitionRequest(url: audioURL)
-                    request.shouldReportPartialResults = false
-
-                    self.recognitionTask?.cancel()
-                    self.recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-                        if let error = error {
-                            try? FileManager.default.removeItem(at: audioURL)
-                            completion(.failure(error))
-                            return
-                        }
-
-                        guard let result = result, result.isFinal else {
-                            return
-                        }
-
-                        let text = result.bestTranscription.formattedString
-                        try? FileManager.default.removeItem(at: audioURL)
-                        completion(.success(text))
-                    }
-                }
+            if let last = merged.last {
+                let n1 = normalizeForCompare(last)
+                let n2 = normalizeForCompare(line)
+                if n1 == n2 { continue }
             }
+
+            merged.append(line)
         }
+
+        return merged
     }
 
-    private func exportAudioTrack(from videoURL: URL, completion: @escaping (Result<URL, Error>) -> Void) {
-        let asset = AVAsset(url: videoURL)
-        if asset.tracks(withMediaType: .audio).isEmpty {
-            completion(.failure(NSError(
-                domain: "VideoProcessor",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "视频没有可识别的音轨"]
-            )))
-            return
-        }
-
-        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
-            completion(.failure(NSError(
-                domain: "VideoProcessor",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "无法创建音频导出会话"]
-            )))
-            return
-        }
-
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("m4a")
-
-        try? FileManager.default.removeItem(at: outputURL)
-
-        exporter.outputURL = outputURL
-        exporter.outputFileType = .m4a
-        exporter.shouldOptimizeForNetworkUse = true
-
-        exporter.exportAsynchronously {
-            switch exporter.status {
-            case .completed:
-                completion(.success(outputURL))
-            case .failed:
-                completion(.failure(exporter.error ?? NSError(
-                    domain: "VideoProcessor",
-                    code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "音轨导出失败"]
-                )))
-            case .cancelled:
-                completion(.failure(NSError(
-                    domain: "VideoProcessor",
-                    code: 6,
-                    userInfo: [NSLocalizedDescriptionKey: "音轨导出已取消"]
-                )))
-            default:
-                completion(.failure(NSError(
-                    domain: "VideoProcessor",
-                    code: 7,
-                    userInfo: [NSLocalizedDescriptionKey: "音轨导出未完成"]
-                )))
-            }
-        }
-    }
-
-    private func requestSpeechAuthorization(_ completion: @escaping (Bool) -> Void) {
-        SFSpeechRecognizer.requestAuthorization { status in
-            completion(status == .authorized)
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func uniquePreservingOrder(_ input: [String]) -> [String] {
-        var seen = Set<String>()
-        var output: [String] = []
-        for item in input where !item.isEmpty {
-            if seen.insert(item).inserted {
-                output.append(item)
-            }
-        }
-        return output
-    }
-
-    private func finishSuccess(_ text: String, completion: ((String) -> Void)?) {
-        DispatchQueue.main.async {
-            self.processedText = text
-            self.errorMessage = nil
-            self.isProcessing = false
-            completion?(text)
-        }
-    }
-
-    private func finishFailure(_ message: String) {
-        DispatchQueue.main.async {
-            self.errorMessage = message
-            self.isProcessing = false
-        }
+    private func normalizeForCompare(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression).lowercased()
     }
 }
