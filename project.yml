@@ -7,13 +7,19 @@ targets:
     platform: iOS
     deploymentTarget: "15.0"
     sources:
-      - Sources
+      - path: Sources
+        group: Sources
+        excludes:
+          - "Info.plist"
     settings:
       INFOPLIST_FILE: Sources/Info.plist
       PRODUCT_BUNDLE_IDENTIFIER: com.yourname.douyindownloader
       MARKETING_VERSION: 1.0.0
       CURRENT_PROJECT_VERSION: 1
+      CODE_SIGN_STYLE: Manual
       CODE_SIGNING_ALLOWED: NO
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGN_IDENTITY: ""
+      PROVISIONING_PROFILE_SPECIFIER: ""
+      GENERATE_INFOPLIST_FILE: NO
       AD_HOC_CODE_SIGNING_ALLOWED: YES
