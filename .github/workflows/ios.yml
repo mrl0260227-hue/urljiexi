@@ -10,24 +10,25 @@ env:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-14 # 指定 M1/M2 运行器
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Select Xcode Version
+        run: |
+          # 强制切换到最新的 Xcode 15 或 16 环境
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Project
-        run: |
-          # 移除 quiet 以便观察是否生成成功
-          xcodegen generate --spec project.yml
-          ls -R DouyinDownloader.xcodeproj # 物理确认工程已生成
+        run: xcodegen generate --spec project.yml
 
       - name: Build App
         run: |
-          # 改用 build 模式，并明确指定输出路径
           xcodebuild build -project DouyinDownloader.xcodeproj \
                            -scheme DouyinDownloader \
                            -sdk iphoneos \
@@ -42,7 +43,6 @@ jobs:
       - name: Package IPA
         run: |
           mkdir -p Payload
-          # 动态查找 build_output 目录下的 .app 文件
           APP_PATH=$(find build_output -name "*.app" -type d | head -n 1)
           echo "Found App at: $APP_PATH"
           
@@ -51,7 +51,6 @@ jobs:
             exit 1
           fi
 
-          # 修复权限与清理签名
           chmod +x "$APP_PATH/DouyinDownloader"
           rm -rf "$APP_PATH/_CodeSignature"
           
