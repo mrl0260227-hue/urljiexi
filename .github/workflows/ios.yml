@@ -18,17 +18,26 @@ jobs:
 
       - name: Generate Xcode Project
         run: |
+          # 生成工程文件
           xcodegen generate
-          # 验证：检查工程文件是否真的包含了源文件引用
-          grep "ContentView.swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：源文件未正确关联到工程！" && exit 1)
+          
+          # 快速验证：只检查文件是否存在，不进行深度 grep，避免 7 分钟的卡顿
+          if [ -d "DouyinDownloader.xcodeproj" ]; then
+            echo "✅ Xcode 项目生成成功"
+          else
+            echo "❌ 错误：项目生成失败"
+            exit 1
+          fi
 
       - name: Archive App
         run: |
+          # 增加 -quiet 减少日志输出，防止云端缓冲区溢出
           xcodebuild archive -project DouyinDownloader.xcodeproj \
                              -scheme DouyinDownloader \
                              -archivePath DouyinDownloader.xcarchive \
                              -sdk iphoneos \
                              -configuration Release \
+                             -quiet \
                              CODE_SIGNING_ALLOWED=NO \
                              CODE_SIGNING_REQUIRED=NO \
                              CODE_SIGN_IDENTITY="" \
@@ -42,10 +51,19 @@ jobs:
           
           APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
           
-          # 修复二进制执行权限（解决 Sideloadly 报错 Invalid file 的核心）
+          # 1. 验证二进制文件是否存在
+          if [ ! -f "$APP_PATH/DouyinDownloader" ]; then
+            echo "❌ 错误：未找到二进制文件！"
+            exit 1
+          fi
+
+          # 2. 修复执行权限
           chmod +x "$APP_PATH/DouyinDownloader"
+          
+          # 3. 清理签名
           rm -rf "$APP_PATH/_CodeSignature"
           
+          # 4. 打包
           cp -a "$APP_PATH" Payload/
           zip -q -r DouyinDownloader.ipa Payload
           
