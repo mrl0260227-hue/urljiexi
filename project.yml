@@ -1,6 +1,8 @@
 name: DouyinDownloader
 options:
   bundleIdPrefix: com.yourname
+  # 强制生成兼容 Xcode 15 的工程格式，解决 future format 错误
+  xcodeVersion: "15.0" 
 targets:
   DouyinDownloader:
     type: application
