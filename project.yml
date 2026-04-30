@@ -7,14 +7,19 @@ targets:
     platform: iOS
     deploymentTarget: "15.0"
     sources:
-      - Sources  # 直接指向截图左侧显示的 Sources 文件夹
+      - path: Sources
+        group: Sources
+        excludes:
+          - "Info.plist"
     settings:
       INFOPLIST_FILE: Sources/Info.plist
       PRODUCT_BUNDLE_IDENTIFIER: com.yourname.douyindownloader
       MARKETING_VERSION: 1.0.0
       CURRENT_PROJECT_VERSION: 1
+      CODE_SIGN_STYLE: Manual
       CODE_SIGNING_ALLOWED: NO
       CODE_SIGNING_REQUIRED: NO
-      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: ""
+      PROVISIONING_PROFILE_SPECIFIER: ""
       GENERATE_INFOPLIST_FILE: NO
       AD_HOC_CODE_SIGNING_ALLOWED: YES
