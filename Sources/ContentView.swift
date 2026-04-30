@@ -15,8 +15,19 @@ struct ContentView: View {
             VStack(spacing: 20) {
                 // 输入区域
                 VStack(alignment: .leading) {
-                    Text("输入抖音链接")
-                        .font(.headline)
+                    HStack {
+                        Text("输入抖音链接")
+                            .font(.headline)
+                        Spacer()
+                        Button(action: {
+                            if let string = UIPasteboard.general.string {
+                                inputURL = string
+                            }
+                        }) {
+                            Label("粘贴", systemImage: "doc.on.clipboard")
+                                .font(.caption)
+                        }
+                    }
                     
                     TextField("在此粘贴抖音分享链接...", text: $inputURL)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -77,9 +88,9 @@ struct ContentView: View {
     }
     
     private func downloadAction() {
-        downloader.downloadVideo(from: inputURL) { url in
-            if let url = url {
-                let newItem = VideoItem(localURL: url, downloadDate: Date())
+        downloader.downloadVideo(from: inputURL) { fileNameURL in
+            if let fileName = fileNameURL?.absoluteString {
+                let newItem = VideoItem(relativePath: fileName, downloadDate: Date())
                 DispatchQueue.main.async {
                     downloadedVideos.insert(newItem, at: 0)
                     saveVideos()
@@ -96,13 +107,12 @@ struct ContentView: View {
         processor.extractTextFromAudio(videoURL: item.localURL)
     }
     
- private func deleteVideo(at offsets: IndexSet) {
+    private func deleteVideo(at offsets: IndexSet) {
         for index in offsets {
             let item = downloadedVideos[index]
             try? FileManager.default.removeItem(at: item.localURL)
         }
-        // 关键修正点：使用 atOffsets 而不是 at
-        downloadedVideos.remove(atOffsets: offsets) 
+        downloadedVideos.remove(atOffsets: offsets)
         saveVideos()
     }
     
