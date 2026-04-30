@@ -10,69 +10,44 @@ jobs:
     runs-on: macos-latest
     
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Build App
         run: |
-          # 生成工程文件
-          xcodegen generate
-          
-          # 快速验证：只检查文件是否存在，不进行深度 grep，避免 7 分钟的卡顿
-          if [ -d "DouyinDownloader.xcodeproj" ]; then
-            echo "✅ Xcode 项目生成成功"
-          else
-            echo "❌ 错误：项目生成失败"
+          xcodebuild -project DouyinDownloader.xcodeproj \
+                     -scheme DouyinDownloader \
+                     -sdk iphoneos \
+                     -configuration Release \
+                     -derivedDataPath build \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     clean build
+
+      - name: Create Payload Directory
+        run: |
+          mkdir -p Payload
+          # 查找生成的 .app 文件并复制到 Payload
+          APP_PATH=$(find build -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: Could not find .app file"
             exit 1
           fi
-
-      - name: Archive App
-        run: |
-          # 增加 -quiet 减少日志输出，防止云端缓冲区溢出
-          xcodebuild archive -project DouyinDownloader.xcodeproj \
-                             -scheme DouyinDownloader \
-                             -archivePath DouyinDownloader.xcarchive \
-                             -sdk iphoneos \
-                             -configuration Release \
-                             -quiet \
-                             CODE_SIGNING_ALLOWED=NO \
-                             CODE_SIGNING_REQUIRED=NO \
-                             CODE_SIGN_IDENTITY="" \
-                             PROVISIONING_PROFILE_SPECIFIER="" \
-                             AD_HOC_CODE_SIGNING_ALLOWED=YES
+          cp -r "$APP_PATH" Payload/
 
       - name: Package IPA
         run: |
-          rm -rf Payload DouyinDownloader.ipa
-          mkdir -p Payload
-          
-          APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
-          
-          # 1. 验证二进制文件是否存在
-          if [ ! -f "$APP_PATH/DouyinDownloader" ]; then
-            echo "❌ 错误：未找到二进制文件！"
-            exit 1
-          fi
-
-          # 2. 修复执行权限
-          chmod +x "$APP_PATH/DouyinDownloader"
-          
-          # 3. 清理签名
-          rm -rf "$APP_PATH/_CodeSignature"
-          
-          # 4. 打包
-          cp -a "$APP_PATH" Payload/
-          zip -q -r DouyinDownloader.ipa Payload
-          
-          echo "==== IPA 结构验证 ===="
-          unzip -l DouyinDownloader.ipa | head -n 15
+          zip -r DouyinDownloader.ipa Payload
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: DouyinDownloader-IPA
           path: DouyinDownloader.ipa
-          retention-days: 5
