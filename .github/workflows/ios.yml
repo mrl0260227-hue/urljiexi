@@ -16,21 +16,14 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Verify Project Structure
-        run: |
-          echo "==== 确认源码目录内容 ===="
-          ls -R Sources/
-          test -f "Sources/ContentView.swift" || (echo "错误：未找到 ContentView.swift" && exit 1)
-
       - name: Generate Xcode Project
         run: |
           xcodegen generate
-          echo "==== 验证工程文件是否关联源码 ===="
-          grep ".swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：工程未关联源码！" && exit 1)
+          # 验证：检查工程文件是否真的包含了源文件引用
+          grep "ContentView.swift" DouyinDownloader.xcodeproj/project.pbxproj || (echo "错误：源文件未正确关联到工程！" && exit 1)
 
       - name: Archive App
         run: |
-          # 使用 archive 模式编译，确保生成完整的 .app 包
           xcodebuild archive -project DouyinDownloader.xcodeproj \
                              -scheme DouyinDownloader \
                              -archivePath DouyinDownloader.xcarchive \
@@ -39,34 +32,23 @@ jobs:
                              CODE_SIGNING_ALLOWED=NO \
                              CODE_SIGNING_REQUIRED=NO \
                              CODE_SIGN_IDENTITY="" \
-                             PROVISIONING_PROFILE_SPECIFIER=""
+                             PROVISIONING_PROFILE_SPECIFIER="" \
+                             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Package IPA
         run: |
-          # 1. 彻底清理旧目录，防止产生冗余层级
-          rm -rf Package Payload DouyinDownloader.ipa
-          
-          # 2. 建立标准的 Payload 文件夹
+          rm -rf Payload DouyinDownloader.ipa
           mkdir -p Payload
           
-          # 3. 定义源文件路径[cite: 1, 2]
           APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
           
-          # 4. 强制修复权限：解决 Invalid file 的核心（针对 205K 二进制文件）[cite: 1, 2]
+          # 修复二进制执行权限（解决 Sideloadly 报错 Invalid file 的核心）
           chmod +x "$APP_PATH/DouyinDownloader"
-          chmod -R 755 "$APP_PATH"
+          rm -rf "$APP_PATH/_CodeSignature"
           
-          # 5. 清理残留签名防止 Sideloadly 冲突[cite: 1]
-          rm -rf "$APP_PATH/_CodeSignature" 2>/dev/null || true
-          
-          # 6. 纯净拷贝（使用 -a 保持属性并丢弃冗余元数据）[cite: 2]
           cp -a "$APP_PATH" Payload/
-          
-          # 7. 核心修正：使用最基础的 zip 命令，确保结构纯净且无 UT 后缀[cite: 2]
-          # 直接在当前目录下压缩 Payload 文件夹
           zip -q -r DouyinDownloader.ipa Payload
           
-          # 8. 打印结构验证
           echo "==== IPA 结构验证 ===="
           unzip -l DouyinDownloader.ipa | head -n 15
 
