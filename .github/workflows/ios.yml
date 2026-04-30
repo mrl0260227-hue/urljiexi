@@ -10,16 +10,21 @@ env:
 
 jobs:
   build:
-    runs-on: macos-14 # 指定 M1/M2 运行器
+    runs-on: macos-14
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Xcode Version
+      - name: Select Best Xcode Version
         run: |
-          # 强制切换到最新的 Xcode 15 或 16 环境
-          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          # 尝试切换到 Xcode 16，如果不存在则回退到 15.4
+          if [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_15.4.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          fi
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -44,7 +49,6 @@ jobs:
         run: |
           mkdir -p Payload
           APP_PATH=$(find build_output -name "*.app" -type d | head -n 1)
-          echo "Found App at: $APP_PATH"
           
           if [ -z "$APP_PATH" ]; then
             echo "❌ 错误：未找到生成的 .app 文件"
