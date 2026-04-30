@@ -5,9 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
-    # 使用 Apple Silicon 运行器，速度极快且更稳定
     runs-on: macos-14
     
     steps:
@@ -18,39 +20,45 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Project
-        timeout-minutes: 3
         run: |
-          # 显式指定 spec 文件，减少扫描范围
-          xcodegen generate --spec project.yml --quiet
-          echo "✅ Project generated"
+          # 移除 quiet 以便观察是否生成成功
+          xcodegen generate --spec project.yml
+          ls -R DouyinDownloader.xcodeproj # 物理确认工程已生成
 
-      - name: Archive App
+      - name: Build App
         run: |
-          # 使用 archive 模式生成标准的 .app 结构
-          xcodebuild archive -project DouyinDownloader.xcodeproj \
-                             -scheme DouyinDownloader \
-                             -archivePath DouyinDownloader.xcarchive \
-                             -sdk iphoneos \
-                             -configuration Release \
-                             -quiet \
-                             CODE_SIGNING_ALLOWED=NO \
-                             CODE_SIGNING_REQUIRED=NO \
-                             CODE_SIGN_IDENTITY="" \
-                             AD_HOC_CODE_SIGNING_ALLOWED=YES
+          # 改用 build 模式，并明确指定输出路径
+          xcodebuild build -project DouyinDownloader.xcodeproj \
+                           -scheme DouyinDownloader \
+                           -sdk iphoneos \
+                           -configuration Release \
+                           -derivedDataPath build_output \
+                           -quiet \
+                           CODE_SIGNING_ALLOWED=NO \
+                           CODE_SIGNING_REQUIRED=NO \
+                           CODE_SIGN_IDENTITY="" \
+                           AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Package IPA
         run: |
           mkdir -p Payload
-          APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
+          # 动态查找 build_output 目录下的 .app 文件
+          APP_PATH=$(find build_output -name "*.app" -type d | head -n 1)
+          echo "Found App at: $APP_PATH"
           
-          # 核心修复：赋予执行权限并清理残留
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ 错误：未找到生成的 .app 文件"
+            exit 1
+          fi
+
+          # 修复权限与清理签名
           chmod +x "$APP_PATH/DouyinDownloader"
           rm -rf "$APP_PATH/_CodeSignature"
           
           cp -a "$APP_PATH" Payload/
           zip -q -r DouyinDownloader.ipa Payload
           
-          echo "==== IPA 结构预览 ===="
+          echo "==== IPA 结构验证 ===="
           unzip -l DouyinDownloader.ipa | head -n 15
 
       - name: Upload Artifact
