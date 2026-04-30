@@ -1,8 +1,6 @@
 name: DouyinDownloader
 options:
   bundleIdPrefix: com.yourname
-  # 强制使用兼容性更好的对象版本 (Xcode 13-15 标准)
-  objectVersion: 56 
 targets:
   DouyinDownloader:
     type: application
