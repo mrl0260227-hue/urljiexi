@@ -10,44 +10,45 @@ jobs:
     runs-on: macos-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4 # 升级到 v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: xcodegen generate --quiet
 
-      - name: Build App
+      - name: Archive App
         run: |
-          xcodebuild -project DouyinDownloader.xcodeproj \
-                     -scheme DouyinDownloader \
-                     -sdk iphoneos \
-                     -configuration Release \
-                     -derivedDataPath build \
-                     CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGN_IDENTITY="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build
-
-      - name: Create Payload Directory
-        run: |
-          mkdir -p Payload
-          # 查找生成的 .app 文件并复制到 Payload
-          APP_PATH=$(find build -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "Error: Could not find .app file"
-            exit 1
-          fi
-          cp -r "$APP_PATH" Payload/
+          xcodebuild archive -project DouyinDownloader.xcodeproj \
+                             -scheme DouyinDownloader \
+                             -archivePath DouyinDownloader.xcarchive \
+                             -sdk iphoneos \
+                             -configuration Release \
+                             -quiet \
+                             CODE_SIGNING_ALLOWED=NO \
+                             CODE_SIGNING_REQUIRED=NO \
+                             CODE_SIGN_IDENTITY="" \
+                             PROVISIONING_PROFILE_SPECIFIER="" \
+                             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Package IPA
         run: |
-          zip -r DouyinDownloader.ipa Payload
+          rm -rf Payload DouyinDownloader.ipa
+          mkdir -p Payload
+          APP_PATH="DouyinDownloader.xcarchive/Products/Applications/DouyinDownloader.app"
+          
+          # 修复权限与清理签名
+          chmod +x "$APP_PATH/DouyinDownloader"
+          rm -rf "$APP_PATH/_CodeSignature"
+          
+          cp -a "$APP_PATH" Payload/
+          zip -q -r DouyinDownloader.ipa Payload
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # 核心修复：升级到 v4
         with:
           name: DouyinDownloader-IPA
           path: DouyinDownloader.ipa
+          retention-days: 5
