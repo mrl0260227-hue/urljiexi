@@ -96,14 +96,15 @@ struct ContentView: View {
         processor.extractTextFromAudio(videoURL: item.localURL)
     }
     
-    private func deleteVideo(at offsets: IndexSet) {
-        for index in offsets {
-            let item = downloadedVideos[index]
-            try? FileManager.default.removeItem(at: item.localURL)
-        }
-        downloadedVideos.remove(at: offsets)
-        saveVideos()
+// 修改后
+private func deleteVideo(at offsets: IndexSet) {
+    for index in offsets {
+        let item = downloadedVideos[index]
+        try? FileManager.default.removeItem(at: item.localURL)
     }
+    downloadedVideos.remove(atOffsets: offsets) // 修正后的语法
+    saveVideos()
+}
     
     private func saveVideos() {
         if let data = try? JSONEncoder().encode(downloadedVideos) {
