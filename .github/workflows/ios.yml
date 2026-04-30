@@ -34,7 +34,6 @@ jobs:
       - name: Create Payload Directory
         run: |
           mkdir -p Payload
-          # 查找生成的 .app 文件并复制到 Payload
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
             echo "Error: Could not find .app file"
