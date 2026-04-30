@@ -4,16 +4,15 @@ import AVKit
 struct ContentView: View {
     @StateObject private var downloader = VideoDownloader()
     @StateObject private var processor = VideoProcessor()
-    
+
     @State private var inputURL: String = ""
     @State private var downloadedVideos: [VideoItem] = []
     @State private var selectedVideo: VideoItem?
     @State private var showingTextResult = false
-    
+
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                // 输入区域
                 VStack(alignment: .leading) {
                     HStack {
                         Text("输入抖音链接")
@@ -28,11 +27,11 @@ struct ContentView: View {
                                 .font(.caption)
                         }
                     }
-                    
+
                     TextField("在此粘贴抖音分享链接...", text: $inputURL)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .padding(.vertical, 5)
-                    
+
                     Button(action: downloadAction) {
                         HStack {
                             if downloader.isDownloading {
@@ -55,14 +54,20 @@ struct ContentView: View {
                 .background(Color(.systemGray6))
                 .cornerRadius(12)
                 .padding(.horizontal)
-                
+
                 if let error = downloader.errorMessage {
                     Text(error)
                         .foregroundColor(.red)
                         .font(.caption)
                 }
-                
-                // 列表区域
+
+                if let processingError = processor.errorMessage {
+                    Text(processingError)
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                        .padding(.horizontal)
+                }
+
                 List {
                     Section(header: Text("已下载视频")) {
                         if downloadedVideos.isEmpty {
@@ -81,12 +86,16 @@ struct ContentView: View {
             }
             .navigationTitle("抖音下载与提取")
             .sheet(isPresented: $showingTextResult) {
-                TextResultView(text: processor.processedText, isProcessing: processor.isProcessing)
+                TextResultView(
+                    text: processor.processedText,
+                    isProcessing: processor.isProcessing,
+                    error: processor.errorMessage
+                )
             }
             .onAppear(perform: loadSavedVideos)
         }
     }
-    
+
     private func downloadAction() {
         downloader.downloadVideo(from: inputURL) { fileNameURL in
             if let fileName = fileNameURL?.absoluteString {
@@ -99,14 +108,18 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func processVideo(_ item: VideoItem) {
         selectedVideo = item
         showingTextResult = true
-        // 默认执行语音转文字
-        processor.extractTextFromAudio(videoURL: item.localURL)
+
+        processor.extractTextFromVideo(videoURL: item.localURL) { extracted in
+            guard let index = downloadedVideos.firstIndex(where: { $0.id == item.id }) else { return }
+            downloadedVideos[index].extractedText = extracted
+            saveVideos()
+        }
     }
-    
+
     private func deleteVideo(at offsets: IndexSet) {
         for index in offsets {
             let item = downloadedVideos[index]
@@ -115,17 +128,16 @@ struct ContentView: View {
         downloadedVideos.remove(atOffsets: offsets)
         saveVideos()
     }
-    
+
     private func saveVideos() {
         if let data = try? JSONEncoder().encode(downloadedVideos) {
             UserDefaults.standard.set(data, forKey: "saved_videos")
         }
     }
-    
+
     private func loadSavedVideos() {
         if let data = UserDefaults.standard.data(forKey: "saved_videos"),
            let items = try? JSONDecoder().decode([VideoItem].self, from: data) {
-            // 过滤掉本地文件已删除的项
             downloadedVideos = items.filter { FileManager.default.fileExists(atPath: $0.localURL.path) }
         }
     }
@@ -134,27 +146,35 @@ struct ContentView: View {
 struct VideoRow: View {
     let item: VideoItem
     let onProcess: () -> Void
-    
+
     var body: some View {
         HStack {
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.fileName)
                     .font(.subheadline)
                     .lineLimit(1)
+
                 Text(item.downloadDate, style: .date)
                     .font(.caption2)
                     .foregroundColor(.gray)
+
+                if let extracted = item.extractedText, !extracted.isEmpty {
+                    Text("已提取：\(extracted.prefix(28))...")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                        .lineLimit(1)
+                }
             }
-            
+
             Spacer()
-            
+
             Button(action: onProcess) {
-                Label("提取文字", systemImage: "doc.text.magnifyingglass")
+                Label("提取字母", systemImage: "text.viewfinder")
                     .font(.caption)
             }
             .buttonStyle(BorderlessButtonStyle())
             .padding(8)
-            .background(Color.green.opacity(0.1))
+            .background(Color.green.opacity(0.12))
             .cornerRadius(8)
         }
         .padding(.vertical, 4)
@@ -164,8 +184,9 @@ struct VideoRow: View {
 struct TextResultView: View {
     let text: String
     let isProcessing: Bool
+    let error: String?
     @Environment(\.presentationMode) var presentationMode
-    
+
     var body: some View {
         NavigationView {
             VStack {
@@ -175,6 +196,10 @@ struct TextResultView: View {
                         Text("正在提取视频中的文字...")
                             .padding()
                     }
+                } else if let error = error, !error.isEmpty {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .padding()
                 } else {
                     ScrollView {
                         Text(text.isEmpty ? "未能识别到文字" : text)
