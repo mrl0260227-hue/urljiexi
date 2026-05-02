@@ -196,7 +196,7 @@ struct TextResultView: View {
                 if isProcessing {
                     VStack {
                         ProgressView()
-                        Text("正在提取视频中的文字...")
+                        Text("正在提取视频中的中英文字幕...")
                             .padding()
                     }
                 } else if let errorMessage = errorMessage, !errorMessage.isEmpty {
@@ -205,7 +205,7 @@ struct TextResultView: View {
                         .padding()
                 } else {
                     ScrollView {
-                        Text(text.isEmpty ? "未能识别到文字" : text)
+                        Text(text.isEmpty ? "未能识别到字幕" : text)
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -240,3 +240,5 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
+
+
