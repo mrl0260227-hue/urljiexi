@@ -19,7 +19,7 @@ final class VideoProcessor: ObservableObject {
 
             DispatchQueue.main.async {
                 if text.isEmpty {
-                    self.errorMessage = "未提取到中英文字幕，请换更清晰视频再试。"
+                    self.errorMessage = "未提取到口播字幕，请换更清晰视频再试。"
                     self.processedText = ""
                 } else {
                     self.processedText = text
@@ -31,7 +31,9 @@ final class VideoProcessor: ObservableObject {
 
     private struct OCRLine {
         let text: String
-        let y: CGFloat
+        let maxY: CGFloat
+        let midX: CGFloat
+        let width: CGFloat
         let confidence: Float
     }
 
@@ -47,9 +49,10 @@ final class VideoProcessor: ObservableObject {
 
         let interval: Double = duration <= 20 ? 0.30 : 0.45
         let maxFrames = 260
-
         let timeline = buildSampleTimes(duration: duration, interval: interval, maxFrames: maxFrames)
+
         var subtitleLines: [String] = []
+        var keyCount: [String: Int] = [:]
 
         for second in timeline {
             let time = CMTime(seconds: second, preferredTimescale: 600)
@@ -62,12 +65,33 @@ final class VideoProcessor: ObservableObject {
                 guard let frameSubtitle = composeFrameSubtitle(from: ocrLines) else { continue }
 
                 appendIfNew(frameSubtitle, to: &subtitleLines)
+                let key = normalizeKey(frameSubtitle)
+                if !key.isEmpty {
+                    keyCount[key, default: 0] += 1
+                }
             } catch {
                 continue
             }
         }
 
-        return subtitleLines.joined(separator: "\n")
+        guard !subtitleLines.isEmpty else { return "" }
+
+        let frameTotal = max(1, timeline.count)
+        let dynamicLines = subtitleLines.filter { line in
+            let key = normalizeKey(line)
+            guard !key.isEmpty else { return false }
+            let ratio = Double(keyCount[key, default: 0]) / Double(frameTotal)
+            return ratio <= 0.55
+        }
+
+        let candidateLines = dynamicLines.isEmpty ? subtitleLines : dynamicLines
+        let semanticLines = filterSemanticLines(candidateLines)
+
+        if semanticLines.isEmpty {
+            return candidateLines.joined(separator: "\n")
+        }
+
+        return semanticLines.joined(separator: "\n")
     }
 
     private func buildSampleTimes(duration: Double, interval: Double, maxFrames: Int) -> [Double] {
@@ -79,7 +103,6 @@ final class VideoProcessor: ObservableObject {
             t += interval
         }
 
-        // If video is very short and no points generated.
         if times.isEmpty {
             times = [max(0.01, min(duration - 0.01, duration * 0.5))]
         }
@@ -91,9 +114,8 @@ final class VideoProcessor: ObservableObject {
         let width = image.width
         let height = image.height
 
-        // Keep a wider bottom area to avoid cutting two-line subtitles.
-        let y = Int(Double(height) * 0.62)
-        let h = max(1, Int(Double(height) * 0.34))
+        let y = Int(Double(height) * 0.74)
+        let h = max(1, Int(Double(height) * 0.20))
         let rect = CGRect(x: 0, y: y, width: width, height: h)
 
         return image.cropping(to: rect)
@@ -107,17 +129,32 @@ final class VideoProcessor: ObservableObject {
 
             for observation in observations {
                 guard let top = observation.topCandidates(1).first else { continue }
+
                 let cleaned = self.normalizeLine(top.string)
                 guard self.isUsefulSubtitle(cleaned) else { continue }
 
-                lines.append(OCRLine(text: cleaned, y: observation.boundingBox.midY, confidence: top.confidence))
+                let box = observation.boundingBox
+
+                if box.midX < 0.12 || box.midX > 0.88 { continue }
+                if box.width < 0.20 { continue }
+                if box.maxY > 0.55 { continue }
+
+                lines.append(
+                    OCRLine(
+                        text: cleaned,
+                        maxY: box.maxY,
+                        midX: box.midX,
+                        width: box.width,
+                        confidence: top.confidence
+                    )
+                )
             }
         }
 
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["zh-Hans", "en-US"]
-        request.minimumTextHeight = 0.018
+        request.minimumTextHeight = 0.02
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         try? handler.perform([request])
@@ -128,13 +165,13 @@ final class VideoProcessor: ObservableObject {
     private func composeFrameSubtitle(from lines: [OCRLine]) -> String? {
         guard !lines.isEmpty else { return nil }
 
-        // Sort from upper line to lower line in the cropped region.
         let sorted = lines.sorted {
-            if abs($0.y - $1.y) > 0.03 { return $0.y > $1.y }
+            if abs($0.maxY - $1.maxY) > 0.02 { return $0.maxY > $1.maxY }
+            if abs($0.midX - $1.midX) > 0.01 { return abs($0.midX - 0.5) < abs($1.midX - 0.5) }
+            if abs($0.width - $1.width) > 0.01 { return $0.width > $1.width }
             return $0.confidence > $1.confidence
         }
 
-        // Keep up to two lines per frame (common subtitle layout).
         var selected: [String] = []
         for line in sorted {
             if !selected.contains(line.text) {
@@ -154,7 +191,6 @@ final class VideoProcessor: ObservableObject {
         if let last = lines.last {
             let normalizedLast = normalizeKey(last)
 
-            // Adjacent near-duplicate suppression only.
             if normalizedCandidate == normalizedLast {
                 return
             }
@@ -171,10 +207,61 @@ final class VideoProcessor: ObservableObject {
 
         lines.append(candidate)
 
-        // Safety cap for very long videos.
         if lines.count > 180 {
             lines.removeFirst(lines.count - 180)
         }
+    }
+
+    private func filterSemanticLines(_ lines: [String]) -> [String] {
+        let interferenceKeywords = [
+            "welcome", "扫码", "店内", "门店", "营业", "地址", "电话", "导航", "广告", "团购",
+            "地铁", "号口", "楼层", "f", "b1", "b2", "3f", "4f", "*welcome"
+        ]
+
+        let speechHints = [
+            "我", "你", "他", "她", "它", "我们", "大家", "这", "那", "就", "了", "在", "有", "很", "也", "都",
+            "还", "要", "会", "可以", "今天", "现在", "这个", "那个", "就是", "真的", "特别", "推荐", "觉得",
+            "然后", "所以", "因为", "来到", "来", "吃", "点", "看", "买", "做", "处理", "现炒", "口味"
+        ]
+
+        var kept: [String] = []
+
+        for line in lines {
+            let lower = line.lowercased()
+            let normalized = normalizeKey(line)
+            guard !normalized.isEmpty else { continue }
+
+            var score = 0
+
+            if line.count >= 6 && line.count <= 26 { score += 1 }
+            if line.range(of: "[\\p{Han}]", options: .regularExpression) != nil { score += 1 }
+
+            if speechHints.contains(where: { line.contains($0) }) {
+                score += 2
+            }
+
+            if line.range(of: "[。！？,.!?]$", options: .regularExpression) != nil {
+                score += 1
+            }
+
+            if interferenceKeywords.contains(where: { lower.contains($0) }) {
+                score -= 3
+            }
+
+            let digitCount = line.filter { $0.isNumber }.count
+            if digitCount >= 4 { score -= 1 }
+
+            if line.range(of: "^[0-9A-Za-z\\s\\*#\\-]+$", options: .regularExpression) != nil {
+                score -= 2
+            }
+
+            // Keep line if likely spoken subtitle.
+            if score >= 1 {
+                appendIfNew(line, to: &kept)
+            }
+        }
+
+        return kept
     }
 
     private func normalizeLine(_ raw: String) -> String {
