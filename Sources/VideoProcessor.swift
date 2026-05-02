@@ -29,6 +29,12 @@ final class VideoProcessor: ObservableObject {
         }
     }
 
+    private struct OCRLine {
+        let text: String
+        let y: CGFloat
+        let confidence: Float
+    }
+
     private func runSubtitleOCR(videoURL: URL) -> String {
         let asset = AVAsset(url: videoURL)
         let duration = CMTimeGetSeconds(asset.duration)
@@ -39,100 +45,136 @@ final class VideoProcessor: ObservableObject {
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
 
-        let sampleCount = max(12, min(36, Int(duration / 0.8)))
+        let interval: Double = duration <= 20 ? 0.30 : 0.45
+        let maxFrames = 260
 
-        var frequencies: [String: Int] = [:]
-        var displayTextByKey: [String: String] = [:]
-        var firstSeenOrder: [String: Int] = [:]
-        var index = 0
+        let timeline = buildSampleTimes(duration: duration, interval: interval, maxFrames: maxFrames)
+        var subtitleLines: [String] = []
 
-        for i in 1...sampleCount {
-            let second = min(duration - 0.05, Double(i) * duration / Double(sampleCount + 1))
-            guard second > 0 else { continue }
+        for second in timeline {
             let time = CMTime(seconds: second, preferredTimescale: 600)
 
             do {
                 let frame = try generator.copyCGImage(at: time, actualTime: nil)
                 guard let subtitleRegion = cropSubtitleRegion(from: frame) else { continue }
 
-                let lines = recognizeSubtitleLines(in: subtitleRegion)
-                for raw in lines {
-                    let cleaned = normalizeLine(raw)
-                    guard isUsefulSubtitle(cleaned) else { continue }
+                let ocrLines = recognizeSubtitleLines(in: subtitleRegion)
+                guard let frameSubtitle = composeFrameSubtitle(from: ocrLines) else { continue }
 
-                    let key = normalizeKey(cleaned)
-                    guard !key.isEmpty else { continue }
-
-                    frequencies[key, default: 0] += 1
-                    if displayTextByKey[key] == nil {
-                        displayTextByKey[key] = cleaned
-                        firstSeenOrder[key] = index
-                        index += 1
-                    }
-                }
+                appendIfNew(frameSubtitle, to: &subtitleLines)
             } catch {
                 continue
             }
         }
 
-        guard !frequencies.isEmpty else { return "" }
+        return subtitleLines.joined(separator: "\n")
+    }
 
-        // Prefer stable lines (appear in multiple frames), then keep early timeline order.
-        var keys = frequencies.keys.filter { frequencies[$0, default: 0] >= 2 }
+    private func buildSampleTimes(duration: Double, interval: Double, maxFrames: Int) -> [Double] {
+        var times: [Double] = []
+        var t = 0.15
 
-        if keys.isEmpty {
-            keys = Array(
-                frequencies
-                    .sorted { lhs, rhs in
-                        if lhs.value != rhs.value { return lhs.value > rhs.value }
-                        return (firstSeenOrder[lhs.key] ?? .max) < (firstSeenOrder[rhs.key] ?? .max)
-                    }
-                    .prefix(8)
-                    .map { $0.key }
-            )
-        } else {
-            keys.sort { (firstSeenOrder[$0] ?? .max) < (firstSeenOrder[$1] ?? .max) }
-            keys = Array(keys.prefix(12))
+        while t < duration - 0.05 && times.count < maxFrames {
+            times.append(t)
+            t += interval
         }
 
-        let lines = keys.compactMap { displayTextByKey[$0] }
-        return lines.joined(separator: "\n")
+        // If video is very short and no points generated.
+        if times.isEmpty {
+            times = [max(0.01, min(duration - 0.01, duration * 0.5))]
+        }
+
+        return times
     }
 
     private func cropSubtitleRegion(from image: CGImage) -> CGImage? {
         let width = image.width
         let height = image.height
 
-        // Subtitle is usually near the lower part in short videos.
-        let y = Int(Double(height) * 0.70)
-        let h = max(1, Int(Double(height) * 0.24))
+        // Keep a wider bottom area to avoid cutting two-line subtitles.
+        let y = Int(Double(height) * 0.62)
+        let h = max(1, Int(Double(height) * 0.34))
         let rect = CGRect(x: 0, y: y, width: width, height: h)
 
         return image.cropping(to: rect)
     }
 
-    private func recognizeSubtitleLines(in image: CGImage) -> [String] {
-        var results: [String] = []
+    private func recognizeSubtitleLines(in image: CGImage) -> [OCRLine] {
+        var lines: [OCRLine] = []
 
         let request = VNRecognizeTextRequest { request, _ in
             guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
 
             for observation in observations {
-                if let top = observation.topCandidates(1).first?.string {
-                    results.append(top)
-                }
+                guard let top = observation.topCandidates(1).first else { continue }
+                let cleaned = self.normalizeLine(top.string)
+                guard self.isUsefulSubtitle(cleaned) else { continue }
+
+                lines.append(OCRLine(text: cleaned, y: observation.boundingBox.midY, confidence: top.confidence))
             }
         }
 
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["zh-Hans", "en-US"]
-        request.minimumTextHeight = 0.022
+        request.minimumTextHeight = 0.018
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         try? handler.perform([request])
 
-        return results
+        return lines
+    }
+
+    private func composeFrameSubtitle(from lines: [OCRLine]) -> String? {
+        guard !lines.isEmpty else { return nil }
+
+        // Sort from upper line to lower line in the cropped region.
+        let sorted = lines.sorted {
+            if abs($0.y - $1.y) > 0.03 { return $0.y > $1.y }
+            return $0.confidence > $1.confidence
+        }
+
+        // Keep up to two lines per frame (common subtitle layout).
+        var selected: [String] = []
+        for line in sorted {
+            if !selected.contains(line.text) {
+                selected.append(line.text)
+            }
+            if selected.count >= 2 { break }
+        }
+
+        guard !selected.isEmpty else { return nil }
+        return selected.joined(separator: " ")
+    }
+
+    private func appendIfNew(_ candidate: String, to lines: inout [String]) {
+        let normalizedCandidate = normalizeKey(candidate)
+        guard !normalizedCandidate.isEmpty else { return }
+
+        if let last = lines.last {
+            let normalizedLast = normalizeKey(last)
+
+            // Adjacent near-duplicate suppression only.
+            if normalizedCandidate == normalizedLast {
+                return
+            }
+
+            if normalizedCandidate.count >= 6 && normalizedLast.contains(normalizedCandidate) {
+                return
+            }
+
+            if normalizedLast.count >= 6 && normalizedCandidate.contains(normalizedLast) {
+                lines[lines.count - 1] = candidate
+                return
+            }
+        }
+
+        lines.append(candidate)
+
+        // Safety cap for very long videos.
+        if lines.count > 180 {
+            lines.removeFirst(lines.count - 180)
+        }
     }
 
     private func normalizeLine(_ raw: String) -> String {
@@ -140,9 +182,9 @@ final class VideoProcessor: ObservableObject {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Remove obvious bracket noise around subtitles.
         text = text.replacingOccurrences(of: "【", with: "")
         text = text.replacingOccurrences(of: "】", with: "")
+        text = text.replacingOccurrences(of: "|", with: "")
 
         return text
     }
@@ -150,17 +192,14 @@ final class VideoProcessor: ObservableObject {
     private func isUsefulSubtitle(_ line: String) -> Bool {
         guard line.count >= 2 else { return false }
 
-        // Skip pure symbols or isolated garbage.
         if line.range(of: "^[\\p{P}\\p{S}\\s]+$", options: .regularExpression) != nil {
             return false
         }
 
-        // Keep only lines containing Chinese/English/number.
         if line.range(of: "[\\p{Han}A-Za-z0-9]", options: .regularExpression) == nil {
             return false
         }
 
-        // Skip watermark-like trivial lines.
         let lower = line.lowercased()
         if lower == "广告" || lower == "ad" {
             return false
