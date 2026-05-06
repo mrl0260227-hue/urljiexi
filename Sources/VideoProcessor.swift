@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Vision
+import Speech
 
 final class VideoProcessor: ObservableObject {
     @Published var isProcessing = false
@@ -15,14 +16,16 @@ final class VideoProcessor: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let text = self.runSubtitleOCR(videoURL: videoURL)
+            let ocrText = self.runSubtitleOCR(videoURL: videoURL)
+            let speechText = self.runSpeechRecognition(videoURL: videoURL)
+            let merged = self.mergeContents(ocrText: ocrText, speechText: speechText)
 
             DispatchQueue.main.async {
-                if text.isEmpty {
-                    self.errorMessage = "未提取到口播字幕，请换更清晰视频再试。"
+                if merged.isEmpty {
+                    self.errorMessage = "未提取到有效内容，请换更清晰视频再试。"
                     self.processedText = ""
                 } else {
-                    self.processedText = text
+                    self.processedText = merged
                 }
                 self.isProcessing = false
             }
@@ -40,8 +43,6 @@ final class VideoProcessor: ObservableObject {
     private func runSubtitleOCR(videoURL: URL) -> String {
         let strict = extractPass(videoURL: videoURL, strict: true)
         if !strict.isEmpty { return strict }
-
-        // Fallback: relax region/geometry/semantic thresholds to avoid empty results.
         return extractPass(videoURL: videoURL, strict: false)
     }
 
@@ -99,7 +100,6 @@ final class VideoProcessor: ObservableObject {
             return semanticLines.joined(separator: "\n")
         }
 
-        // Final fallback: keep non-interference lines to avoid empty result.
         let fallback = candidateLines.filter { !containsInterference($0.lowercased()) }
         return dedupPreserveOrder(fallback).joined(separator: "\n")
     }
@@ -327,6 +327,147 @@ final class VideoProcessor: ObservableObject {
                 out.append(line)
             }
         }
+        return out
+    }
+
+    private func runSpeechRecognition(videoURL: URL) -> String {
+        guard let audioURL = exportAudioToM4A(videoURL: videoURL) else { return "" }
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+
+        let authOK = requestSpeechAuthorizationSync()
+        guard authOK else { return "" }
+
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN")), recognizer.isAvailable else {
+            return ""
+        }
+
+        let request = SFSpeechURLRecognitionRequest(url: audioURL)
+        request.shouldReportPartialResults = false
+
+        let sema = DispatchSemaphore(value: 0)
+        var output = ""
+
+        let task = recognizer.recognitionTask(with: request) { result, error in
+            if let result = result, result.isFinal {
+                output = result.bestTranscription.formattedString
+                sema.signal()
+                return
+            }
+
+            if error != nil {
+                sema.signal()
+            }
+        }
+
+        _ = sema.wait(timeout: .now() + 40)
+        task.cancel()
+
+        return output
+    }
+
+    private func exportAudioToM4A(videoURL: URL) -> URL? {
+        let asset = AVAsset(url: videoURL)
+        guard asset.tracks(withMediaType: .audio).isEmpty == false else { return nil }
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else { return nil }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("m4a")
+
+        try? FileManager.default.removeItem(at: outputURL)
+        exporter.outputURL = outputURL
+        exporter.outputFileType = .m4a
+        exporter.shouldOptimizeForNetworkUse = true
+
+        let sema = DispatchSemaphore(value: 0)
+        exporter.exportAsynchronously {
+            sema.signal()
+        }
+
+        _ = sema.wait(timeout: .now() + 45)
+
+        if exporter.status == .completed {
+            return outputURL
+        }
+
+        return nil
+    }
+
+    private func requestSpeechAuthorizationSync() -> Bool {
+        let sema = DispatchSemaphore(value: 0)
+        var granted = false
+
+        SFSpeechRecognizer.requestAuthorization { status in
+            granted = (status == .authorized)
+            sema.signal()
+        }
+
+        _ = sema.wait(timeout: .now() + 10)
+        return granted
+    }
+
+    private func mergeContents(ocrText: String, speechText: String) -> String {
+        let ocrLines = splitToLines(ocrText)
+        let speechLines = splitSpeechToLines(speechText)
+
+        var merged: [String] = []
+
+        for line in speechLines where !line.isEmpty {
+            merged.append(line)
+        }
+        for line in ocrLines where !line.isEmpty {
+            merged.append(line)
+        }
+
+        let cleaned = dedupBySimilarity(merged)
+        return cleaned.joined(separator: "\n")
+    }
+
+    private func splitToLines(_ text: String) -> [String] {
+        text
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func splitSpeechToLines(_ text: String) -> [String] {
+        guard !text.isEmpty else { return [] }
+
+        let rough = text
+            .replacingOccurrences(of: "。", with: "。\n")
+            .replacingOccurrences(of: "！", with: "！\n")
+            .replacingOccurrences(of: "？", with: "？\n")
+            .replacingOccurrences(of: ",", with: "，")
+
+        return rough
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func dedupBySimilarity(_ lines: [String]) -> [String] {
+        var out: [String] = []
+
+        for line in lines {
+            let key = normalizeKey(line)
+            if key.isEmpty { continue }
+
+            var duplicated = false
+            for existing in out {
+                let eKey = normalizeKey(existing)
+                if eKey.isEmpty { continue }
+
+                if key == eKey || key.contains(eKey) || eKey.contains(key) {
+                    duplicated = true
+                    break
+                }
+            }
+
+            if !duplicated {
+                out.append(line)
+            }
+        }
+
         return out
     }
 }
