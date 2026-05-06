@@ -415,8 +415,20 @@ final class VideoProcessor: ObservableObject {
         for line in speechLines where !line.isEmpty {
             merged.append(line)
         }
+
+        // If speech is available, only append OCR lines that look like real spoken subtitle supplements.
+        let hasSpeechBase = speechLines.joined().count >= 16
         for line in ocrLines where !line.isEmpty {
-            merged.append(line)
+            if hasSpeechBase {
+                if shouldKeepOCRSupplement(line, speechLines: speechLines) {
+                    merged.append(line)
+                }
+            } else {
+                // No speech base: keep OCR but still filter obvious noise.
+                if !containsInterference(line.lowercased()) {
+                    merged.append(line)
+                }
+            }
         }
 
         let cleaned = dedupBySimilarity(merged)
@@ -437,12 +449,48 @@ final class VideoProcessor: ObservableObject {
             .replacingOccurrences(of: "。", with: "。\n")
             .replacingOccurrences(of: "！", with: "！\n")
             .replacingOccurrences(of: "？", with: "？\n")
+            .replacingOccurrences(of: "；", with: "；\n")
+            .replacingOccurrences(of: "，", with: "，\n")
             .replacingOccurrences(of: ",", with: "，")
 
         return rough
             .split(separator: "\n")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func shouldKeepOCRSupplement(_ line: String, speechLines: [String]) -> Bool {
+        let lower = line.lowercased()
+        if containsInterference(lower) {
+            return false
+        }
+
+        // Drop pure Latin fragments like "Melcome".
+        if line.range(of: "^[A-Za-z\\s\\*#\\-]+$", options: .regularExpression) != nil {
+            return false
+        }
+
+        // Prefer Chinese-speaking subtitles as supplement.
+        let hasChinese = line.range(of: "[\\p{Han}]", options: .regularExpression) != nil
+        if !hasChinese {
+            return false
+        }
+
+        let key = normalizeKey(line)
+        if key.count < 4 {
+            return false
+        }
+
+        // Already covered by speech text.
+        for s in speechLines {
+            let skey = normalizeKey(s)
+            if skey.isEmpty { continue }
+            if skey.contains(key) || key.contains(skey) {
+                return false
+            }
+        }
+
+        return true
     }
 
     private func dedupBySimilarity(_ lines: [String]) -> [String] {
