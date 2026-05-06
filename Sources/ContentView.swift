@@ -196,7 +196,7 @@ struct TextResultView: View {
                 if isProcessing {
                     VStack {
                         ProgressView()
-                        Text("正在提取视频中的中英文字幕...")
+                        Text("正在提取视频语音+字幕内容...")
                             .padding()
                     }
                 } else if let errorMessage = errorMessage, !errorMessage.isEmpty {
@@ -240,5 +240,6 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
+
 
 
